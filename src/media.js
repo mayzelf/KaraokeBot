@@ -18,7 +18,8 @@ if (process.env.YTDLP_POT_PROVIDER_URL?.trim()) {
 // profile is not available inside the container. Mount a Netscape-format
 // cookie file and point YTDLP_COOKIES_FILE at it instead.
 const YTDLP_AUTH_ARGS = [];
-if (process.env.YTDLP_COOKIES_FILE?.trim()) {
+const YOUTUBE_COOKIES_CONFIGURED = Boolean(process.env.YTDLP_COOKIES_FILE?.trim());
+if (YOUTUBE_COOKIES_CONFIGURED) {
   YTDLP_AUTH_ARGS.push('--cookies', process.env.YTDLP_COOKIES_FILE.trim());
 }
 if (process.env.YTDLP_USER_AGENT?.trim()) {
@@ -161,7 +162,7 @@ async function searchTracks(query, provider = 'youtube') {
     const youtube = uniqueTracks(await searchYouTube(cleanQuery));
     if (youtube.length) return youtube;
   } catch (error) { youtubeError = error; }
-  if (config.pipedApiUrls.length) {
+  if (config.pipedApiUrls.length && !YOUTUBE_COOKIES_CONFIGURED) {
     const piped = uniqueTracks(await searchPiped(cleanQuery).catch(() => []));
     if (piped.length) return piped;
   }
@@ -215,11 +216,15 @@ async function resolveTrack(query) {
   if (isSoundCloudUrl(cleanQuery)) return resolveWithYtDlp(cleanQuery, cleanQuery, 'soundcloud');
   if (isYouTubeUrl(cleanQuery)) {
     try { return await resolveWithYtDlp(cleanQuery, cleanQuery, 'youtube'); }
-    catch (error) { if (config.pipedApiUrls.length) return resolvePipedTrack(cleanQuery, cleanQuery).catch(() => { throw error; }); throw error; }
+    catch (error) {
+      if (config.pipedApiUrls.length && !YOUTUBE_COOKIES_CONFIGURED) return resolvePipedTrack(cleanQuery, cleanQuery).catch(() => { throw error; });
+      throw error;
+    }
   }
   let youtubeError;
   try { return await resolveWithYtDlp(`ytsearch1:${cleanQuery}`, cleanQuery, 'youtube'); }
   catch (error) { youtubeError = error; }
+  if (YOUTUBE_COOKIES_CONFIGURED) throw youtubeError;
   try { return await resolveWithYtDlp(`scsearch1:${cleanQuery}`, cleanQuery, 'soundcloud'); }
   catch (soundCloudError) {
     if (config.pipedApiUrls.length) {
