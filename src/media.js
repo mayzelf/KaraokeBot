@@ -55,11 +55,13 @@ function parseJson(output, message) {
 
 function youtubeId(value) {
   if (!value) return null;
+  const raw = String(value).trim();
+  if (/^[\w-]{5,20}$/.test(raw)) return raw;
   try {
-    const url = new URL(String(value), 'https://www.youtube.com');
+    const url = new URL(raw, 'https://www.youtube.com');
     const id = url.hostname === 'youtu.be' || url.hostname === 'www.youtu.be' ? url.pathname.slice(1) : url.searchParams.get('v');
     return id && /^[\w-]{5,20}$/.test(id) ? id : null;
-  } catch { return /^[\w-]{5,20}$/.test(String(value)) ? String(value) : null; }
+  } catch { return null; }
 }
 
 function previewYouTube(data, provider = 'YouTube') {
