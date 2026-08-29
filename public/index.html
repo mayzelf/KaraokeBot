@@ -1,12 +1,44 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karaoke Control Room</title><link rel="stylesheet" href="/styles.css"></head>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#17131f">
+  <title>Karaoke Control Room</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
 <body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
   <main class="shell">
-    <header class="topbar"><div class="brand"><span class="brand-mark">♪</span><span>Karaoke Control Room</span></div><div id="account"></div></header>
-    <section id="logged-out" class="hero"><div class="hero-copy"><p class="eyebrow">SELF-HOSTED DISCORD KARAOKE</p><h1>Make every voice<br><em>the main event.</em></h1><p class="lede">Play music in Discord, show the exact lyric line in real time, and manage every server from one calm, simple dashboard.</p><a class="button primary" href="/auth/login">Log in with Discord <span>→</span></a></div><div class="hero-card"><div class="equalizer"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="hero-quote">“The next line is<br><strong>yours.</strong>”</div><div class="mini-line">♪ &nbsp; synchronized lyrics</div></div></section>
-    <section id="app" class="hidden"><div class="app-heading"><div><p class="eyebrow">CONTROL ROOM</p><h2>Your servers</h2></div><p class="muted">Choose a server to manage playback and access.</p></div><div id="guilds" class="guild-grid"></div><div id="workspace" class="hidden"></div></section>
+    <header class="topbar">
+      <a class="brand" href="/"><span class="brand-mark">♪</span><span>Karaoke <b>Control Room</b></span></a>
+      <div id="account"></div>
+    </header>
+
+    <section id="logged-out" class="hero">
+      <div class="hero-copy">
+        <div class="eyebrow"><span class="eyebrow-dot"></span> SELF-HOSTED DISCORD KARAOKE</div>
+        <h1>The next line<br><em>is yours.</em></h1>
+        <p class="lede">Turn any Discord voice channel into a tiny live stage. Play music, follow every phrase, and let the room sing together.</p>
+        <a class="button button-dark" href="/auth/login"><span>Log in with Discord</span><b>↗</b></a>
+        <div class="hero-note"><span>⌁</span> synchronized lyrics · made for the whole room</div>
+      </div>
+      <div class="hero-stage">
+        <div class="stage-glow"></div>
+        <div class="stage-top"><span class="live-badge"><i></i> LIVE STAGE</span><span class="stage-time">00:42</span></div>
+        <div class="stage-screen"><span class="screen-kicker">NOW SINGING</span><strong>Never gonna<br><em>give you up</em></strong><span class="screen-next">Never gonna let you down</span></div>
+        <div class="stage-eq"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="stage-bottom"><span>♪&nbsp; voice channel chat</span><span class="stage-spark">✦</span></div>
+      </div>
+    </section>
+
+    <section id="app" class="hidden">
+      <div class="app-heading"><div><div class="eyebrow"><span class="eyebrow-dot"></span> CONTROL ROOM</div><h2>Your stages</h2></div><p class="muted">Pick a server to start the show.</p></div>
+      <div id="guilds" class="guild-grid"></div>
+      <div id="workspace" class="hidden"></div>
+    </section>
   </main>
-  <template id="guild-template"><button class="guild-card"><span class="guild-icon"></span><span class="guild-info"><strong class="guild-name"></strong><small class="guild-status"></small></span><span class="arrow">→</span></button></template>
+  <template id="guild-template"><button class="guild-card"><span class="guild-icon"></span><span class="guild-info"><strong class="guild-name"></strong><small class="guild-status"></small></span><span class="guild-arrow">↗</span></button></template>
   <script src="/app.js"></script>
-</body></html>
+</body>
+</html>

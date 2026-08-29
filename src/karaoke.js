@@ -2,7 +2,7 @@ const {
   AudioPlayerStatus, createAudioPlayer, createAudioResource, joinVoiceChannel,
   StreamType, VoiceConnectionStatus, entersState
 } = require('@discordjs/voice');
-const { EmbedBuilder } = require('discord.js');
+const { ActivityType, EmbedBuilder } = require('discord.js');
 const { ensureGuild, getGuild } = require('./db');
 const { resolveTrack, createAudioStream } = require('./media');
 const { findLyrics, currentLine } = require('./lyrics');
@@ -11,6 +11,21 @@ class KaraokeManager {
   constructor(client) {
     this.client = client;
     this.sessions = new Map();
+  }
+
+  updatePresence() {
+    if (!this.client.user) return;
+    const activeTracks = [...this.sessions.values()]
+      .map((session) => session.current)
+      .filter(Boolean);
+    const track = activeTracks[0];
+    let name = 'Use /play to sing';
+    if (track) {
+      const label = track.artist ? `${track.artist} — ${track.title}` : track.title;
+      const extra = activeTracks.length > 1 ? ` (+${activeTracks.length - 1} more)` : '';
+      name = `🎤 ${label}${extra}`.slice(0, 128);
+    }
+    this.client.user.setActivity(name, { type: ActivityType.Playing });
   }
 
   session(guildId) {
@@ -69,12 +84,45 @@ class KaraokeManager {
     return (Date.now() - session.startedAt - session.pausedTotal) / 1000;
   }
 
+  splitLyrics(text, limit = 3500) {
+    const chunks = [];
+    let remaining = String(text || '').trim();
+    while (remaining.length > limit) {
+      let splitAt = remaining.lastIndexOf('\n', limit);
+      if (splitAt < Math.floor(limit * 0.55)) splitAt = remaining.lastIndexOf(' ', limit);
+      if (splitAt < 1) splitAt = limit;
+      chunks.push(remaining.slice(0, splitAt).trim());
+      remaining = remaining.slice(splitAt).trim();
+    }
+    if (remaining) chunks.push(remaining);
+    return chunks;
+  }
+
+  async sendPlainLyrics(session, track, notice) {
+    const chunks = this.splitLyrics(track.lyrics.text);
+    const messages = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const embed = new EmbedBuilder()
+        .setColor(0xf59e0b)
+        .setTitle(index === 0 ? '🎤 Now singing · Full lyrics' : '🎤 Full lyrics · Continued')
+        .setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}\n\n${chunks[index]}`)
+        .setFooter({ text: 'Complete lyrics · not synchronized' })
+        .setURL(track.url);
+      if (index === 0 && track.thumbnail) embed.setThumbnail(track.thumbnail);
+      if (index === 0 && notice) embed.setFooter({ text: `${notice} · Complete lyrics · not synchronized` });
+      const message = await session.textChannel.send({ embeds: [embed] }).catch(() => null);
+      if (message) messages.push(message);
+    }
+    session.lyricMessage = messages[0] || null;
+  }
+
   async next(guildId, notice) {
     const session = this.session(guildId);
     if (session.stream?.destroyChildren) session.stream.destroyChildren();
     if (session.lyricTimer) clearInterval(session.lyricTimer);
     session.lyricTimer = null;
     session.current = session.queue.shift() || null;
+    this.updatePresence();
     session.startedAt = 0;
     session.pausedAt = 0;
     session.pausedTotal = 0;
@@ -90,22 +138,33 @@ class KaraokeManager {
     session.stream = createAudioStream(track);
     const resource = createAudioResource(session.stream, { inputType: StreamType.Raw, inlineVolume: true });
     resource.volume?.setVolume(getGuild(guildId)?.default_volume ?? 0.8);
-    session.player.once(AudioPlayerStatus.Playing, () => {
+    const onPlaying = () => {
+      if (session.startedAt) return;
       session.startedAt = Date.now();
       this.startLyrics(guildId);
-    });
+    };
+    session.player.once(AudioPlayerStatus.Playing, onPlaying);
     if (session.textChannel) {
-      const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎤 Now singing').setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}\n\nLoading synchronized lyrics…`).setURL(track.url);
-      if (track.thumbnail) embed.setThumbnail(track.thumbnail);
-      if (notice) embed.setFooter({ text: notice });
-      session.lyricMessage = await session.textChannel.send({ embeds: [embed] }).catch(() => null);
+      if (track.lyrics?.mode === 'plain') {
+        await this.sendPlainLyrics(session, track, notice);
+      } else {
+        const firstLine = track.lyrics?.lines?.[0]?.text;
+        const nextLine = track.lyrics?.lines?.[1]?.text;
+        const lyricPreview = firstLine ? `\n\n## ${firstLine}${nextLine ? `\n\n${nextLine}` : ''}` : '\n\nLoading synchronized lyrics…';
+        const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎤 Now singing').setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}${lyricPreview}`).setURL(track.url);
+        if (track.thumbnail) embed.setThumbnail(track.thumbnail);
+        if (notice) embed.setFooter({ text: notice });
+        else if (firstLine) embed.setFooter({ text: 'Synchronized lyrics · starting playback' });
+        session.lyricMessage = await session.textChannel.send({ embeds: [embed] }).catch(() => null);
+      }
     }
-    if (!track.lyrics?.lines?.length && session.lyricMessage) {
-      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('Synchronized lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no timed lyrics were found for this track.`).setURL(track.url)] }).catch(() => {});
+    if (!track.lyrics && session.lyricMessage) {
+      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('Lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no lyrics were found for this track.`).setURL(track.url)] }).catch(() => {});
     }
     // Register the listener and post the initial message before starting audio,
     // otherwise a fast player can emit Playing before lyrics are ready to update.
     session.player.play(resource);
+    if (session.player.state.status === AudioPlayerStatus.Playing) onPlaying();
   }
 
   startLyrics(guildId) {
@@ -153,6 +212,7 @@ class KaraokeManager {
     if (session.connection) session.connection.destroy();
     session.connection = null;
     session.current = null;
+    this.updatePresence();
   }
   leave(guildId) { this.stop(guildId); }
 }

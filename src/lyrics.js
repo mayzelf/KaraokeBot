@@ -22,11 +22,23 @@ async function findLyrics(title) {
     if (!response.ok) return null;
     const results = await response.json();
     const match = results.find((item) => item.syncedLyrics && parseLrc(item.syncedLyrics).length);
-    if (!match) return null;
+    if (match) {
+      return {
+        source: 'LRCLIB',
+        mode: 'synced',
+        track: [match.artistName, match.trackName].filter(Boolean).join(' — ') || title,
+        lines: parseLrc(match.syncedLyrics),
+        text: match.plainLyrics?.trim() || null
+      };
+    }
+    const plainMatch = results.find((item) => item.plainLyrics?.trim());
+    if (!plainMatch) return null;
     return {
       source: 'LRCLIB',
-      track: [match.artistName, match.trackName].filter(Boolean).join(' — ') || title,
-      lines: parseLrc(match.syncedLyrics)
+      mode: 'plain',
+      track: [plainMatch.artistName, plainMatch.trackName].filter(Boolean).join(' — ') || title,
+      lines: [],
+      text: plainMatch.plainLyrics.trim()
     };
   } catch (error) {
     console.warn('[lyrics] lookup failed:', error.message);

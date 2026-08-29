@@ -28,6 +28,7 @@ function voiceChannel(interaction) { return interaction.member?.voice?.channel |
 client.once('ready', async () => {
   console.log(`[discord] logged in as ${client.user.tag}`);
   for (const guild of client.guilds.cache.values()) ensureGuild(guild.id, guild.name);
+  karaoke.updatePresence();
   await registerCommands().catch((error) => console.error('[discord] command registration failed:', error.message));
 });
 client.on('guildCreate', (guild) => ensureGuild(guild.id, guild.name));
@@ -41,7 +42,8 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.deferReply();
       const voice = voiceChannel(interaction);
       const track = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice);
-      return interaction.editReply(`Added **${track.title}** to the queue. ${track.lyrics ? 'Synchronized lyrics found.' : 'No synchronized lyrics were found for this track.'}`);
+      const lyricsMessage = track.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : track.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.';
+      return interaction.editReply(`Added **${track.title}** to the queue. ${lyricsMessage}`);
     }
     if (command === 'join') {
       const voice = voiceChannel(interaction);

@@ -18,16 +18,20 @@ app.get('/healthz', (req, res) => res.json({ ok: true, discord: client.isReady()
 const redirect = (res, path) => res.redirect(`${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`);
 function requireLogin(req, res, next) { if (!req.session.user) return res.status(401).json({ error: 'Login required.' }); next(); }
 function discordGuilds(req) { return req.session.guilds || []; }
-function canManage(req, guildId) {
-  if (config.ownerIds.has(req.session.user?.id)) return true;
-  const guild = discordGuilds(req).find((item) => item.id === guildId);
-  if (!guild) return false;
+function guildAccess(guild) {
+  if (!guild) return { allowed: false, label: '' };
+  const isOwner = guild.owner === true;
+  if (isOwner) return { allowed: true, label: 'Server owner' };
   let permissions;
-  try { permissions = BigInt(guild.permissions_new ?? guild.permissions ?? 0); } catch { return false; }
-  const canInviteBot = (permissions & 0x20n) !== 0n || (permissions & 0x8n) !== 0n;
-  return guild.owner === true || canInviteBot;
+  try { permissions = BigInt(guild.permissions_new ?? guild.permissions ?? 0); } catch { return { allowed: false, label: '' }; }
+  const hasManageServer = (permissions & 0x20n) !== 0n || (permissions & 0x8n) !== 0n;
+  return { allowed: hasManageServer, label: 'Manage Server' };
 }
-function requireGuild(req, res, next) { if (!canManage(req, req.params.guildId)) return res.status(403).json({ error: 'You need Manage Server permission for this server.' }); next(); }
+function canManage(req, guildId) {
+  const guild = discordGuilds(req).find((item) => item.id === guildId);
+  return guildAccess(guild).allowed;
+}
+function requireGuild(req, res, next) { if (!canManage(req, req.params.guildId)) return res.status(403).json({ error: 'You need to own this server or have Manage Server permission.' }); next(); }
 function defaultTextChannel(guild) {
   return guild.systemChannel || guild.channels.cache.find((channel) => channel.isTextBased?.() && channel.permissionsFor(guild.members.me)?.has('SendMessages')) || null;
 }
@@ -58,7 +62,7 @@ app.get('/auth/callback', async (req, res) => {
 app.get('/auth/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
 
 app.get('/api/me', (req, res) => res.json({ user: req.session.user || null }));
-app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ ...guild, botPresent: Boolean(client.guilds.cache.get(guild.id)), settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
+app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
 app.get('/api/guilds/:guildId/status', requireLogin, requireGuild, (req, res) => res.json({ status: karaoke.status(req.params.guildId), inviteUrl: inviteUrl(req.params.guildId), botPresent: Boolean(client.guilds.cache.get(req.params.guildId)) }));
 app.get('/api/guilds/:guildId/channels', requireLogin, requireGuild, (req, res) => {
   const guild = client.guilds.cache.get(req.params.guildId);

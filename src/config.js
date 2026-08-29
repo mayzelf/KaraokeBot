@@ -16,6 +16,5 @@ module.exports = {
   redirectUri: `${publicUrl}/auth/callback`,
   port: Number(process.env.PORT || 3000),
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
-  ownerIds: new Set((process.env.OWNER_IDS || '').split(',').map((id) => id.trim()).filter(Boolean)),
   databasePath: process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'karaoke.sqlite')
 };
