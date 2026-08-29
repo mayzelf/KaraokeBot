@@ -24,6 +24,10 @@ const megabytes = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed * 1024 * 1024) : fallback * 1024 * 1024;
 };
+const boolean = (value, fallback) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  return /^(1|true|yes|on)$/i.test(String(value).trim());
+};
 
 module.exports = {
   token: process.env.DISCORD_TOKEN || '',
@@ -35,6 +39,7 @@ module.exports = {
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
   databasePath: process.env.DATABASE_PATH || path.join(process.cwd(), 'data', 'karaoke.sqlite'),
   libraryPath: process.env.LIBRARY_PATH || path.join(process.cwd(), 'data', 'library'),
+  libraryUploadsEnabled: boolean(process.env.LIBRARY_UPLOADS_ENABLED, false),
   libraryMaxBytes: gigabytes(process.env.LIBRARY_MAX_GB, 20),
   libraryMaxDurationSeconds: minutes(process.env.LIBRARY_MAX_MINUTES, 5 * 60),
   libraryMaxUploadBytes: megabytes(process.env.LIBRARY_MAX_UPLOAD_MB, 50),

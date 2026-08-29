@@ -121,6 +121,10 @@ async function selectGuild(guild) {
       <div class="save-row"><button class="control control-accent save" id="save">Save settings</button><div id="settings-notice" class="notice"></div></div>
     </div>`;
   $('#workspace-server-name').textContent = guild.name;
+  const libraryUploadEnabled = guild.libraryUploadsEnabled === true;
+  const libraryUploadForm = $('#library-upload');
+  libraryUploadForm.querySelectorAll('input, button').forEach((control) => { control.disabled = !libraryUploadEnabled; });
+  if (!libraryUploadEnabled) $('#library-notice').textContent = 'Song uploads are disabled. Set LIBRARY_UPLOADS_ENABLED=true to enable them.';
   $('#back').onclick = () => { workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); clearTimeout(state.searchTimer); state.selectedTrack = null; };
   const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`);
   fillSettings(settings);
@@ -238,6 +242,7 @@ async function loadLibrary(guild) {
 function bindLibrary(guild) {
   $('#library-upload').onsubmit = async (event) => {
     event.preventDefault();
+    if (guild.libraryUploadsEnabled !== true) return;
     const file = $('#library-file').files[0];
     if (!file) return;
     const button = $('#library-upload-button');

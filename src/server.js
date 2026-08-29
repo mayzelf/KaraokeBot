@@ -17,7 +17,7 @@ const { isDiscordId, validateDiscordIdList, validateOptionalDiscordId, validateQ
 
 const app = express();
 if (config.publicUrl.startsWith('https://')) app.set('trust proxy', 1);
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], scriptSrc: ["'self'"], styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ["'self'", 'https://fonts.gstatic.com'], imgSrc: ["'self'", 'data:', 'https://cdn.discordapp.com'], connectSrc: ["'self'"], formAction: ["'self'", 'https://discord.com'] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], scriptSrc: ["'self'"], styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ["'self'", 'https://fonts.gstatic.com'], imgSrc: ["'self'", 'data:', 'https://cdn.discordapp.com', 'https://*.ytimg.com', 'https://yt3.ggpht.com', 'https://*.sndcdn.com'], connectSrc: ["'self'"], formAction: ["'self'", 'https://discord.com'] } } }));
 app.use(express.json({ limit: '100kb' }));
 app.use(session({ secret: config.sessionSecret, store: new SQLiteStore(), proxy: config.publicUrl.startsWith('https://'), resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: config.publicUrl.startsWith('https://'), maxAge: 7 * 24 * 60 * 60 * 1000 } }));
 app.use(express.static(path.resolve(__dirname, '..', 'public')));
@@ -103,7 +103,7 @@ app.get('/api/search', requireLogin, async (req, res) => {
     res.json({ results });
   } catch (error) { res.status(400).json({ error: error.message }); }
 });
-app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
+app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), libraryUploadsEnabled: config.libraryUploadsEnabled, settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
 app.get('/api/guilds/:guildId/status', requireLogin, requireGuild, (req, res, next) => {
   const state = createOAuthState();
   req.session.oauthState = state;
@@ -187,6 +187,7 @@ app.get('/api/guilds/:guildId/library', requireLogin, requireGuild, (req, res) =
   res.json({ tracks: listForGuild(req.params.guildId) });
 });
 app.post('/api/guilds/:guildId/library', requireLogin, requireGuild, async (req, res) => {
+  if (!config.libraryUploadsEnabled) return res.status(403).json({ error: 'Song uploads are disabled. Set LIBRARY_UPLOADS_ENABLED=true to enable them.' });
   let upload;
   try {
     upload = await parseAudioUpload(req);
