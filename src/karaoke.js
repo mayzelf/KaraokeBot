@@ -7,26 +7,55 @@ const { ensureGuild, getGuild } = require('./db');
 const { resolveTrack, createAudioStream } = require('./media');
 const { findLyrics, currentLine } = require('./lyrics');
 const noMentions = { parse: [] };
+const presenceRefreshMs = 15_000;
+
+function formatPresenceTime(seconds) {
+  const value = Math.max(0, Math.floor(Number(seconds) || 0));
+  const minutes = Math.floor(value / 60);
+  const remainingSeconds = String(value % 60).padStart(2, '0');
+  return `${minutes}:${remainingSeconds}`;
+}
 
 class KaraokeManager {
   constructor(client) {
     this.client = client;
     this.sessions = new Map();
+    this.presenceTimer = null;
   }
 
   updatePresence() {
     if (!this.client.user) return;
-    const activeTracks = [...this.sessions.values()]
-      .map((session) => session.current)
-      .filter(Boolean);
-    const track = activeTracks[0];
+    const activeSessions = [...this.sessions.values()]
+      .filter((session) => session.current);
+    const activeTracks = activeSessions.map((session) => session.current);
+    const activeSession = activeSessions[0];
+    const track = activeSession?.current;
     let name = 'Use /play to sing';
-    if (track) {
+    let state;
+    if (track && activeSession) {
       const label = track.artist ? `${track.artist} — ${track.title}` : track.title;
       const extra = activeTracks.length > 1 ? ` (+${activeTracks.length - 1} more)` : '';
       name = `🎤 ${label}${extra}`.slice(0, 128);
+      const duration = Number(track.duration);
+      const elapsed = this.elapsed(activeSession);
+      state = `${formatPresenceTime(elapsed)} / ${duration > 0 ? formatPresenceTime(duration) : '--:--'}`;
+      this.startPresenceRefresh();
+    } else {
+      this.stopPresenceRefresh();
     }
-    this.client.user.setActivity(name, { type: ActivityType.Playing });
+    this.client.user.setActivity(name, { type: ActivityType.Playing, ...(state ? { state } : {}) });
+  }
+
+  startPresenceRefresh() {
+    if (this.presenceTimer) return;
+    this.presenceTimer = setInterval(() => this.updatePresence(), presenceRefreshMs);
+    this.presenceTimer.unref?.();
+  }
+
+  stopPresenceRefresh() {
+    if (!this.presenceTimer) return;
+    clearInterval(this.presenceTimer);
+    this.presenceTimer = null;
   }
 
   session(guildId) {
@@ -222,12 +251,14 @@ class KaraokeManager {
   pause(guildId) {
     const session = this.session(guildId);
     if (session.player.pause() && !session.pausedAt) session.pausedAt = Date.now();
+    this.updatePresence();
   }
   resume(guildId) {
     const session = this.session(guildId);
     if (session.pausedAt) session.pausedTotal += Date.now() - session.pausedAt;
     session.pausedAt = 0;
     session.player.unpause();
+    this.updatePresence();
   }
   async skip(guildId, guild, requesterId) {
     const session = this.session(guildId);
