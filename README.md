@@ -23,7 +23,7 @@ The bot needs the **Connect**, **Speak**, **View Channel**, **Read Message Histo
 
 ## Using karaoke
 
-In Discord, use `/play song:...` with a song title, artist, or YouTube URL. The bot joins the requester's current voice channel, finds audio with `yt-dlp`, and searches LRCLIB for synchronized `.lrc` lyrics. When timed lyrics are unavailable but complete lyrics exist, the bot posts the full lyrics instead and labels them as unsynchronized. Lyrics are posted directly into Discord's built-in chat for that voice channel, so there is no separate lyrics-channel choice. Use `/queue`, `/skip`, `/pause`, `/resume`, `/stop`, `/join`, and `/leave` to control the room.
+In Discord, use `/play song:...` with a song title, artist, or YouTube URL. The bot joins the requester's current voice channel, finds audio with `yt-dlp`, normalizes source loudness with FFmpeg, and searches LRCLIB for synchronized `.lrc` lyrics. When timed lyrics are unavailable but complete lyrics exist, the bot posts the full lyrics instead and labels them as unsynchronized. Lyrics are posted directly into Discord's built-in chat for that voice channel, so there is no separate lyrics-channel choice. Use `/queue`, `/skip`, `/pause`, `/resume`, `/stop`, `/join`, and `/leave` to control the room.
 
 While a song is active, the bot's Discord activity shows the current artist and track title. When the queue is idle, it switches back to `Use /play to sing`.
 
@@ -47,6 +47,7 @@ For a public deployment, set `PUBLIC_URL` to the HTTPS URL users will open and a
 ## Notes
 
 - Audio is obtained from the URL/search provider selected by `yt-dlp`; only use sources and music you are allowed to access and play.
+- Audio is normalized to approximately -16 LUFS with a -1.5 dB true-peak ceiling so quiet and loud source videos are closer in perceived volume. The dashboard's default volume remains the final gain adjustment.
 - Lyrics are provided by LRCLIB. Tracks with timed lyrics show the active phrase; if only complete lyrics are available, the bot posts them as a readable, unsynchronized fallback.
 - Discord bot accounts can send audio and messages, but the official bot voice API does not provide Go Live/screen-share video publishing. The live lyric message is the supported in-Discord karaoke display; a future browser overlay could be used for a projector or shared user screen.
 - Playback queues are in memory and reset if the container restarts; server configuration persists in SQLite.

@@ -31,6 +31,10 @@ function createAudioStream(track) {
   const ytdlp = spawn('yt-dlp', ['--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
+    // Normalize different source videos to a consistent perceived loudness
+    // before Discord receives the raw PCM stream. The dashboard volume is
+    // applied afterward as the final user-controlled gain.
+    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
   ytdlp.stdout.pipe(ffmpeg.stdin);
