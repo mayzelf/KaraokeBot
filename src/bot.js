@@ -42,17 +42,17 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'play') {
       await interaction.deferReply();
       const voice = voiceChannel(interaction);
-      const track = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice);
+      const track = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice, interaction.user.id);
       const lyricsMessage = track.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : track.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.';
       return interaction.editReply({ content: `Added **${track.title}** to the queue. ${lyricsMessage}`, allowedMentions: noMentions });
     }
     if (command === 'join') {
       const voice = voiceChannel(interaction);
-      await karaoke.join(interaction.guild, voice, voice);
+      await karaoke.join(interaction.guild, voice, voice, interaction.user.id);
       return interaction.reply('Joined your voice channel. Use `/play` to start singing.');
     }
     if (command === 'leave') { karaoke.leave(interaction.guildId); return interaction.reply('Stopped karaoke and left the voice channel.'); }
-    if (command === 'skip') { await interaction.deferReply(); await karaoke.skip(interaction.guildId); return interaction.editReply('Skipped.'); }
+    if (command === 'skip') { await interaction.deferReply(); await karaoke.skip(interaction.guildId, interaction.guild, interaction.user.id); return interaction.editReply('Skipped.'); }
     if (command === 'pause') { karaoke.pause(interaction.guildId); return interaction.reply('Paused.'); }
     if (command === 'resume') { karaoke.resume(interaction.guildId); return interaction.reply('Resumed.'); }
     if (command === 'stop') { karaoke.stop(interaction.guildId); return interaction.reply('Stopped and cleared the queue.'); }

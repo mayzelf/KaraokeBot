@@ -1,7 +1,7 @@
 {
   "name": "karaoke-bot",
   "version": "1.0.0",
-  "private": true,
+  "private": false,
   "description": "A self-hosted Discord karaoke bot with synchronized lyrics and a web dashboard.",
   "main": "src/index.js",
   "scripts": {

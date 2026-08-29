@@ -33,7 +33,7 @@ class KaraokeManager {
     if (!this.sessions.has(guildId)) this.sessions.set(guildId, {
       queue: [], connection: null, player: createAudioPlayer(), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
-      startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null
+      startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
@@ -59,21 +59,28 @@ class KaraokeManager {
     return true;
   }
 
-  async join(guild, voiceChannel, textChannel) {
+  async join(guild, voiceChannel, textChannel, requesterId = null) {
     const session = this.session(guild.id);
     if (!voiceChannel?.joinable || !voiceChannel?.speakable) throw new Error('I cannot join or speak in that voice channel. Check my Discord permissions.');
+    // A guild session owns one voice room at a time. Record the room explicitly
+    // so a second requester cannot move an active performance away from the
+    // singers who started it without first stopping the session.
+    const activeChannelId = session.voiceChannelId || guild.members.me?.voice?.channelId || null;
+    if (activeChannelId && activeChannelId !== voiceChannel.id) throw new Error('I am already active in another voice channel. Use /leave there before moving me.');
     session.connection = joinVoiceChannel({ channelId: voiceChannel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false });
     await entersState(session.connection, VoiceConnectionStatus.Ready, 15_000);
     session.connection.subscribe(session.player);
+    session.voiceChannelId = voiceChannel.id;
     // Discord exposes a built-in text chat on every voice channel. VoiceChannel
     // supports .send(), so lyrics stay with the people singing automatically.
     session.textChannel = textChannel || voiceChannel || session.textChannel;
     return session;
   }
 
-  async add(guild, query, voiceChannel, textChannel) {
-    const session = await this.join(guild, voiceChannel, textChannel);
+  async add(guild, query, voiceChannel, textChannel, requesterId = null) {
+    const session = await this.join(guild, voiceChannel, textChannel, requesterId);
     const track = await resolveTrack(query);
+    track.requestedBy = requesterId;
     session.queue.push(track);
     if (!session.current) await this.next(guild.id);
     return track;
@@ -204,7 +211,21 @@ class KaraokeManager {
     session.pausedAt = 0;
     session.player.unpause();
   }
-  skip(guildId) { return this.next(guildId); }
+  async skip(guildId, guild, requesterId) {
+    const session = this.session(guildId);
+    if (!session.current) throw new Error('There is no active song to skip.');
+    const activeChannelId = session.voiceChannelId || guild.members.me?.voice?.channelId || null;
+    const member = requesterId ? await guild.members.fetch(requesterId).catch(() => null) : null;
+    if (!member?.voice?.channelId || member.voice.channelId !== activeChannelId) throw new Error('Join my active voice channel before skipping a song.');
+    // A track belongs to the person who queued it. That person can skip it
+    // immediately; everyone else must wait until its requester has left the
+    // active room, which prevents strangers from removing another singer's song.
+    if (session.current.requestedBy !== requesterId) {
+      const owner = session.current.requestedBy ? await guild.members.fetch(session.current.requestedBy).catch(() => null) : null;
+      if (owner?.voice?.channelId === activeChannelId) throw new Error('Only the person who queued this song can skip it while they are still in the room.');
+    }
+    return this.next(guildId);
+  }
   removeQueued(guildId, index) {
     const session = this.session(guildId);
     if (!Number.isInteger(index) || index < 0 || index >= session.queue.length) throw new Error('That queue entry no longer exists.');
@@ -231,6 +252,7 @@ class KaraokeManager {
     if (session.stream?.destroyChildren) session.stream.destroyChildren();
     if (session.connection) session.connection.destroy();
     session.connection = null;
+    session.voiceChannelId = null;
     session.current = null;
     this.updatePresence();
   }

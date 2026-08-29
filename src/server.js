@@ -134,13 +134,13 @@ function control(method) {
       const guild = client.guilds.cache.get(id);
       if (method === 'play') {
         const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel;
-        const track = await karaoke.add(guild, validateSongQuery(body.song), voice, voice || defaultTextChannel(guild));
+        const track = await karaoke.add(guild, validateSongQuery(body.song), voice, voice || defaultTextChannel(guild), req.session.user.id);
         return res.json(track);
       }
       if (method === 'join') {
         const channelId = validateOptionalDiscordId(body.channelId);
         const voice = (channelId ? guild.channels.cache.get(channelId) : null) || await requesterVoiceMember(guild, req.session.user.id);
-        await karaoke.join(guild, voice, voice || defaultTextChannel(guild));
+        await karaoke.join(guild, voice, voice || defaultTextChannel(guild), req.session.user.id);
         return res.json({ ok: true });
       }
       if (method === 'remove') {
@@ -154,7 +154,7 @@ function control(method) {
       if (method === 'clear') {
         return res.json({ removed: karaoke.clearQueue(id) });
       }
-      if (method === 'skip') await karaoke.skip(id);
+      if (method === 'skip') await karaoke.skip(id, guild, req.session.user.id);
       if (method === 'pause') karaoke.pause(id);
       if (method === 'resume') karaoke.resume(id);
       if (method === 'stop' || method === 'leave') karaoke[method](id);

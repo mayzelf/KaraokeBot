@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title>Karaoke Control Room</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2039"/>
+      <stop offset="1" stop-color="#17131f"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <path fill="#dafa91" d="M38 13v27.2a9.2 9.2 0 1 1-4-7.6V20.4l18-4.8v20.6a9.2 9.2 0 1 1-4-7.6V10.8L38 13Zm-9 28.2a5.2 5.2 0 1 0-10.4 0 5.2 5.2 0 0 0 10.4 0Zm19 3a5.2 5.2 0 1 0-10.4 0 5.2 5.2 0 0 0 10.4 0Z"/>
+</svg>

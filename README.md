@@ -23,11 +23,11 @@ The bot needs the **Connect**, **Speak**, **View Channel**, **Read Message Histo
 
 ## Using karaoke
 
-In Discord, use `/play song:...` with a song title, artist, or YouTube URL. The bot joins the requester's current voice channel, finds audio with `yt-dlp`, normalizes source loudness with FFmpeg, and searches LRCLIB for synchronized `.lrc` lyrics. When timed lyrics are unavailable but complete lyrics exist, the bot posts the full lyrics instead and labels them as unsynchronized. Lyrics are posted directly into Discord's built-in chat for that voice channel, so there is no separate lyrics-channel choice. Use `/queue`, `/skip`, `/pause`, `/resume`, `/stop`, `/join`, and `/leave` to control the room.
+In Discord, use `/play song:...` with a song title, artist, or YouTube URL. The bot joins the requester's current voice channel, finds audio with `yt-dlp`, normalizes source loudness with FFmpeg, and searches LRCLIB for synchronized `.lrc` lyrics. When timed lyrics are unavailable but complete lyrics exist, the bot posts the full lyrics instead and labels them as unsynchronized. Lyrics are posted directly into Discord's built-in chat for that voice channel, so there is no separate lyrics-channel choice. The bot stays locked to its active voice channel while playing; use `/leave` before intentionally moving it. Use `/queue`, `/skip`, `/pause`, `/resume`, `/stop`, `/join`, and `/leave` to control the room.
 
 While a song is active, the bot's Discord activity shows the current artist and track title. When the queue is idle, it switches back to `Use /play to sing`.
 
-The dashboard has the same controls. The selected server name remains visible in the workspace header. Search by name to choose one of the YouTube results before playing, or paste a YouTube URL directly. Its Play and Join buttons use the logged-in user's current Discord voice channel; the Join button also accepts a channel ID when the browser session cannot see the voice state. Upcoming tracks can be moved up or down, removed individually, or cleared without stopping the current song.
+The dashboard has the same controls. The selected server name remains visible in the workspace header. Search by name to choose one of the YouTube results before playing, or paste a YouTube URL directly. Its Play and Join buttons use the logged-in user's current Discord voice channel; the Join button also accepts a channel ID when the browser session cannot see the voice state. The active room cannot be taken over from another voice channel. The person who queued the current track can skip it, and other people can skip it after that requester leaves the room. Upcoming tracks can be moved up or down, removed individually, or cleared without stopping the current song.
 
 ## Configuration
 
@@ -47,6 +47,20 @@ For a public deployment, set `PUBLIC_URL` to the HTTPS URL users will open and a
 ## Security safeguards
 
 Dashboard input is validated again on the server, even when requests do not come from the web interface. Song URLs are restricted to YouTube, Discord IDs and volume values are validated and bounded, request rates are limited, OAuth state is bound to the browser session, dynamic page values are rendered safely, and a restrictive Content Security Policy blocks inline scripts. Set a strong `SESSION_SECRET` of at least 32 characters for production deployments.
+
+## Credits and licensing
+
+This project is released under the MIT License; see [LICENSE](LICENSE).
+
+The application is built with and gives credit to these direct dependencies:
+
+- [discord.js](https://github.com/discordjs/discord.js) and [@discordjs/voice](https://github.com/discordjs/voice) — Apache License 2.0.
+- [Express](https://github.com/expressjs/express), [express-session](https://github.com/expressjs/session), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [Helmet](https://github.com/helmetjs/helmet), and [opusscript](https://github.com/abalabahaha/opusscript) — MIT License.
+- [dotenv](https://github.com/motdotla/dotenv) — BSD 2-Clause License.
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org/) — external runtime tools included by the Docker image under their respective upstream terms.
+- [LRCLIB](https://lrclib.net/) — the external lyrics service used for timed and unsynchronized lyric lookups. Lyrics remain subject to the rights and terms of their respective owners.
+
+The public source repository is [github.com/mayzelf/karaoke-bot](https://github.com/mayzelf/karaoke-bot). Please keep secrets in `.env`; the repository intentionally contains only `.env.example` with placeholders.
 
 ## Notes
 
