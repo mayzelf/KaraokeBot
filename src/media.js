@@ -1,5 +1,6 @@
 const { spawn } = require('node:child_process');
-const { safeYouTubeThumbnail, validateSongQuery } = require('./validation');
+const config = require('./config');
+const { isSoundCloudUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateSongQuery } = require('./validation');
 // The base image includes Node 22. yt-dlp requires a JS runtime for YouTube's
 // challenge solving; enable Node explicitly instead of relying on detection.
 const YTDLP_RUNTIME_ARGS = ['--js-runtimes', 'node'];
@@ -48,46 +49,173 @@ function cleanMetadata(value, fallback = '', limit = 200) {
   return String(value || fallback).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, limit);
 }
 
-function previewTrack(data) {
-  if (!data?.id || !/^[\w-]{5,20}$/.test(String(data.id))) return null;
-  const url = validateSongQuery(`https://www.youtube.com/watch?v=${encodeURIComponent(data.id)}`);
+function parseJson(output, message) {
+  try { return JSON.parse(output); } catch { throw new Error(message); }
+}
+
+function youtubeId(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(String(value), 'https://www.youtube.com');
+    const id = url.hostname === 'youtu.be' || url.hostname === 'www.youtu.be' ? url.pathname.slice(1) : url.searchParams.get('v');
+    return id && /^[\w-]{5,20}$/.test(id) ? id : null;
+  } catch { return /^[\w-]{5,20}$/.test(String(value)) ? String(value) : null; }
+}
+
+function previewYouTube(data, provider = 'YouTube') {
+  const id = youtubeId(data?.id || data?.videoId || data?.url);
+  if (!id) return null;
+  const url = validateSongQuery(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`);
   return {
-    id: String(data.id),
+    id,
     url,
+    source: 'youtube',
+    provider,
     title: cleanMetadata(data.title, 'Untitled track'),
-    artist: cleanMetadata(data.artist || data.channel || data.uploader, '', 120),
+    artist: cleanMetadata(data.artist || data.channel || data.uploader || data.uploaderName, '', 120),
     duration: Number(data.duration || 0),
     thumbnail: safeYouTubeThumbnail(data.thumbnail)
   };
+}
+
+function previewSoundCloud(data) {
+  const url = data?.webpage_url || data?.original_url || data?.url;
+  if (!isSoundCloudUrl(url)) return null;
+  return {
+    id: `soundcloud:${data.id || url}`,
+    url: validateSongQuery(url),
+    source: 'soundcloud',
+    provider: 'SoundCloud',
+    title: cleanMetadata(data.title, 'Untitled track'),
+    artist: cleanMetadata(data.artist || data.uploader || data.creator, '', 120),
+    duration: Number(data.duration || 0),
+    thumbnail: safeSoundCloudArtwork(data.thumbnail || data.thumbnail_url)
+  };
+}
+
+async function searchYouTube(cleanQuery) {
+  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings', `ytsearch5:${cleanQuery}`]);
+  const data = parseJson(output, 'YouTube returned an invalid search response.');
+  return (Array.isArray(data.entries) ? data.entries : []).map((item) => previewYouTube(item)).filter(Boolean);
+}
+
+async function searchSoundCloud(cleanQuery) {
+  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings', `scsearch5:${cleanQuery}`]);
+  const data = parseJson(output, 'SoundCloud returned an invalid search response.');
+  return (Array.isArray(data.entries) ? data.entries : []).map(previewSoundCloud).filter(Boolean);
+}
+
+async function pipedRequest(endpoint, params = {}) {
+  if (!config.pipedApiUrl) throw new Error('Piped is not configured.');
+  const url = new URL(`${config.pipedApiUrl}${endpoint}`);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Piped returned HTTP ${response.status}.`);
+  return response.json();
+}
+
+async function searchPiped(cleanQuery) {
+  const data = await pipedRequest('/search', { q: cleanQuery, filter: 'videos' });
+  return (Array.isArray(data) ? data : data.items || []).filter((item) => item.type === undefined || item.type === 'stream').map((item) => previewYouTube({
+    id: item.url || item.id || item.videoId,
+    title: item.title,
+    uploaderName: item.uploaderName || item.uploader,
+    duration: item.duration,
+    thumbnail: item.thumbnail
+  }, 'YouTube via Piped')).filter(Boolean);
+}
+
+function uniqueTracks(tracks) {
+  const seen = new Set();
+  return tracks.filter((track) => {
+    const key = track.url.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function searchTracks(query) {
   const cleanQuery = validateSongQuery(query);
   if (/^https?:\/\//i.test(cleanQuery)) return [];
-  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings', `ytsearch5:${cleanQuery}`]);
-  const data = JSON.parse(output);
-  return (Array.isArray(data.entries) ? data.entries : []).map(previewTrack).filter(Boolean);
+  const attempts = await Promise.allSettled([searchYouTube(cleanQuery), searchSoundCloud(cleanQuery)]);
+  const youtube = attempts[0].status === 'fulfilled' ? attempts[0].value : [];
+  const soundCloud = attempts[1].status === 'fulfilled' ? attempts[1].value : [];
+  let piped = [];
+  if (!youtube.length && config.pipedApiUrl) piped = await searchPiped(cleanQuery).catch(() => []);
+  const results = uniqueTracks([...youtube, ...soundCloud, ...piped]);
+  if (results.length) return results;
+  const failure = attempts.find((attempt) => attempt.status === 'rejected');
+  throw failure?.reason || new Error('No playable result was found.');
+}
+
+function addPrivateStreamUrl(track, streamUrl) {
+  Object.defineProperty(track, 'streamUrl', { value: streamUrl, enumerable: false });
+  return track;
+}
+
+async function resolvePipedTrack(url, fallbackTitle = 'YouTube track') {
+  const id = youtubeId(url);
+  if (!id) throw new Error('Piped could not identify that YouTube video.');
+  const data = await pipedRequest(`/streams/${encodeURIComponent(id)}`);
+  const audio = (data.audioStreams || []).filter((stream) => stream.url && !stream.videoOnly).sort((left, right) => Number(right.bitrate || 0) - Number(left.bitrate || 0))[0];
+  if (!audio) throw new Error('Piped did not return a playable audio stream.');
+  const track = {
+    id,
+    url: validateSongQuery(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`),
+    source: 'piped',
+    provider: 'YouTube via Piped',
+    title: cleanMetadata(data.title, fallbackTitle),
+    artist: cleanMetadata(data.uploader || data.uploaderName, '', 120),
+    duration: Number(data.duration || 0),
+    thumbnail: safeYouTubeThumbnail(data.thumbnail)
+  };
+  return addPrivateStreamUrl(track, audio.url);
+}
+
+async function resolveWithYtDlp(target, fallback, source) {
+  const output = await runYtDlp(['--dump-single-json', '--no-playlist', '--skip-download', target]);
+  const data = parseJson(output, 'The media provider returned an invalid response.');
+  if (!data.webpage_url || !data.id) throw new Error('No playable YouTube result was found.');
+  const playableUrl = validateSongQuery(data.webpage_url);
+  const resolvedSource = source || (isSoundCloudUrl(playableUrl) ? 'soundcloud' : 'youtube');
+  return {
+    id: data.id,
+    url: playableUrl,
+    source: resolvedSource,
+    provider: resolvedSource === 'soundcloud' ? 'SoundCloud' : 'YouTube',
+    title: cleanMetadata(data.title, fallback),
+    artist: cleanMetadata(data.artist || data.uploader, '', 120),
+    duration: Number(data.duration || 0),
+    thumbnail: resolvedSource === 'soundcloud' ? safeSoundCloudArtwork(data.thumbnail || data.thumbnail_url) : safeYouTubeThumbnail(data.thumbnail)
+  };
 }
 
 async function resolveTrack(query) {
   const cleanQuery = validateSongQuery(query);
-  const target = /^https?:\/\//i.test(cleanQuery) ? cleanQuery : `ytsearch1:${cleanQuery}`;
-  const output = await runYtDlp(['--dump-single-json', '--no-playlist', '--skip-download', target]);
-  const data = JSON.parse(output);
-  if (!data.webpage_url || !data.id) throw new Error('No playable YouTube result was found.');
-  const playableUrl = validateSongQuery(data.webpage_url);
-  return {
-    id: data.id,
-    url: playableUrl,
-    title: cleanMetadata(data.title, cleanQuery),
-    artist: cleanMetadata(data.artist || data.uploader, '', 120),
-    duration: Number(data.duration || 0),
-    thumbnail: safeYouTubeThumbnail(data.thumbnail)
-  };
+  if (isSoundCloudUrl(cleanQuery)) return resolveWithYtDlp(cleanQuery, cleanQuery, 'soundcloud');
+  if (isYouTubeUrl(cleanQuery)) {
+    try { return await resolveWithYtDlp(cleanQuery, cleanQuery, 'youtube'); }
+    catch (error) { if (config.pipedApiUrl) return resolvePipedTrack(cleanQuery, cleanQuery).catch(() => { throw error; }); throw error; }
+  }
+  let youtubeError;
+  try { return await resolveWithYtDlp(`ytsearch1:${cleanQuery}`, cleanQuery, 'youtube'); }
+  catch (error) { youtubeError = error; }
+  try { return await resolveWithYtDlp(`scsearch1:${cleanQuery}`, cleanQuery, 'soundcloud'); }
+  catch (soundCloudError) {
+    if (config.pipedApiUrl) {
+      try {
+        const results = await searchPiped(cleanQuery);
+        if (results[0]) return resolvePipedTrack(results[0].url, results[0].title);
+      } catch {}
+    }
+    throw new Error(`No playable result was found. YouTube: ${youtubeError.message} SoundCloud: ${soundCloudError.message}`);
+  }
 }
 
 function createAudioStream(track) {
   if (track.source === 'library' && track.path) return createLibraryAudioStream(track.path);
+  if (track.source === 'piped' && track.streamUrl) return createRemoteAudioStream(track.streamUrl);
   const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
@@ -115,6 +243,21 @@ function createAudioStream(track) {
     if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
   };
   ytdlp.on('error', (error) => stream.destroy(error));
+  ffmpeg.on('error', (error) => stream.destroy(error));
+  return stream;
+}
+
+function createRemoteAudioStream(streamUrl) {
+  const ffmpeg = spawn('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-i', streamUrl,
+    '-vn', '-map', '0:a:0',
+    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+    '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const stream = ffmpeg.stdout;
+  ffmpeg.stderr.on('data', (chunk) => console.warn('[ffmpeg]', chunk.toString().trim()));
+  stream.ffmpeg = ffmpeg;
+  stream.destroyChildren = () => { if (!ffmpeg.killed) ffmpeg.kill('SIGKILL'); };
   ffmpeg.on('error', (error) => stream.destroy(error));
   return stream;
 }

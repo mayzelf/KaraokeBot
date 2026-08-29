@@ -8,7 +8,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const karaoke = new KaraokeManager(client);
 const noMentions = { parse: [] };
 const commands = [
-  new SlashCommandBuilder().setName('play').setDescription('Play a song and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('YouTube URL or song search').setMaxLength(300).setRequired(true)),
+  new SlashCommandBuilder().setName('play').setDescription('Play a song and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('Song search, YouTube URL, or SoundCloud URL').setMaxLength(300).setRequired(true)),
   new SlashCommandBuilder().setName('join').setDescription('Join your current voice channel'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop karaoke and leave the voice channel'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),

@@ -35,5 +35,6 @@ module.exports = {
   libraryMaxDurationSeconds: minutes(process.env.LIBRARY_MAX_MINUTES, 5 * 60),
   libraryMaxUploadBytes: megabytes(process.env.LIBRARY_MAX_UPLOAD_MB, 50),
   libraryMaxUserBytes: gigabytes(process.env.LIBRARY_MAX_USER_GB, 1),
-  libraryMaxGuildBytes: gigabytes(process.env.LIBRARY_MAX_GUILD_GB, 5)
+  libraryMaxGuildBytes: gigabytes(process.env.LIBRARY_MAX_GUILD_GB, 5),
+  pipedApiUrl: (process.env.PIPED_API_URL || '').replace(/\/$/, '')
 };

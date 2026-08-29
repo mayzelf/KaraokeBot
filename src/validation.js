@@ -1,5 +1,6 @@
 const DISCORD_ID = /^\d{15,25}$/;
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be']);
+const SOUNDCLOUD_HOSTS = new Set(['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com']);
 
 function isDiscordId(value) {
   return typeof value === 'string' && DISCORD_ID.test(value);
@@ -23,15 +24,23 @@ function validateOptionalDiscordId(value, label = 'Channel ID') {
 }
 
 function validateSongQuery(value) {
-  if (typeof value !== 'string') throw new Error('Enter a song title, artist, or YouTube URL.');
+  if (typeof value !== 'string') throw new Error('Enter a song title, artist, or a supported audio URL.');
   const query = value.trim();
   if (!query || query.length > 300 || /[\u0000-\u001f\u007f]/.test(query)) throw new Error('Song searches must be between 1 and 300 characters.');
   if (/^https?:\/\//i.test(query)) {
     let url;
-    try { url = new URL(query); } catch { throw new Error('Enter a valid YouTube URL.'); }
-    if (!YOUTUBE_HOSTS.has(url.hostname.toLowerCase()) || !['http:', 'https:'].includes(url.protocol)) throw new Error('Only YouTube URLs are supported.');
+    try { url = new URL(query); } catch { throw new Error('Enter a valid YouTube or SoundCloud URL.'); }
+    if (![...YOUTUBE_HOSTS, ...SOUNDCLOUD_HOSTS].includes(url.hostname.toLowerCase()) || !['http:', 'https:'].includes(url.protocol)) throw new Error('Only YouTube and SoundCloud URLs are supported.');
   }
   return query;
+}
+
+function isYouTubeUrl(value) {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && YOUTUBE_HOSTS.has(url.hostname.toLowerCase()); } catch { return false; }
+}
+
+function isSoundCloudUrl(value) {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && SOUNDCLOUD_HOSTS.has(url.hostname.toLowerCase()); } catch { return false; }
 }
 
 function validateVolume(value) {
@@ -55,4 +64,13 @@ function safeYouTubeThumbnail(value) {
   } catch { return null; }
 }
 
-module.exports = { isDiscordId, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume };
+function safeSoundCloudArtwork(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return url.protocol === 'https:' && (host === 'sndcdn.com' || host.endsWith('.sndcdn.com')) ? url.toString() : null;
+  } catch { return null; }
+}
+
+module.exports = { isDiscordId, isSoundCloudUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume };

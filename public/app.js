@@ -100,7 +100,7 @@ async function selectGuild(guild) {
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE A TRACK</div><h3>Play a song</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search a song or paste a YouTube URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+        <div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search a song or paste a YouTube or SoundCloud URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat.</p><div id="notice" class="notice"></div>
         <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue"></div>
       </div>
@@ -415,7 +415,7 @@ function renderSearchResults(results) {
     const title = document.createElement('strong');
     title.textContent = track.title || 'Untitled track';
     const meta = document.createElement('small');
-    meta.textContent = [track.artist, formatDuration(track.duration)].filter(Boolean).join(' · ') || 'YouTube result';
+    meta.textContent = [track.provider || 'YouTube', track.artist, formatDuration(track.duration)].filter(Boolean).join(' · ');
     copy.append(title, meta);
     const arrow = document.createElement('span');
     arrow.className = 'search-result-arrow';
