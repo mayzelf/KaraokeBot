@@ -60,19 +60,23 @@ class KaraokeManager {
 
   session(guildId) {
     if (!this.sessions.has(guildId)) this.sessions.set(guildId, {
-      queue: [], connection: null, player: createAudioPlayer(), current: null,
+      // Remote sources can have momentary read gaps. Allow one second before
+      // treating a missing frame as the end of a track.
+      queue: [], connection: null, player: createAudioPlayer({ behaviors: { maxMissedFrames: 50 } }), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
       startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
-      lastCompleted: null, nextPromise: null, onPlaying: null
+      lastCompleted: null, nextPromise: null, onPlaying: null, playbackToken: 0
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
       session.bound = true;
-      session.player.on(AudioPlayerStatus.Idle, () => {
+      session.player.on(AudioPlayerStatus.Idle, (oldState) => {
+        if (oldState.resource?.metadata?.playbackToken !== session.playbackToken) return;
         this.next(guildId).catch((error) => console.error(`[audio:${guildId}]`, error.message));
       });
       session.player.on('error', (error) => {
         console.error(`[audio:${guildId}]`, error.message);
+        if (error.resource?.metadata?.playbackToken !== session.playbackToken) return;
         this.next(guildId, 'Playback failed, skipping this track.').catch((nextError) => console.error(`[audio:${guildId}]`, nextError.message));
       });
     }
@@ -193,6 +197,7 @@ class KaraokeManager {
     const session = this.session(guildId);
     const previousTrack = session.current;
     const previousStream = session.stream;
+    const playbackToken = ++session.playbackToken;
     session.stream = null;
     if (session.onPlaying) {
       session.player.off(AudioPlayerStatus.Playing, session.onPlaying);
@@ -220,11 +225,15 @@ class KaraokeManager {
     const track = session.current;
     track.lyrics = await findLyrics({ artist: track.artist, title: track.title });
     session.stream = createAudioStream(track);
-    const resource = createAudioResource(session.stream, { inputType: StreamType.Raw, inlineVolume: true });
+    const resource = createAudioResource(session.stream, {
+      inputType: StreamType.Raw,
+      inlineVolume: true,
+      metadata: { playbackToken }
+    });
     resource.volume?.setVolume(getGuild(guildId)?.default_volume ?? 0.8);
     const onPlaying = () => {
       session.onPlaying = null;
-      if (session.startedAt) return;
+      if (session.playbackToken !== playbackToken || session.current !== track || session.startedAt) return;
       session.startedAt = Date.now();
       this.startLyrics(guildId);
     };
@@ -334,6 +343,8 @@ class KaraokeManager {
   stop(guildId) {
     const session = this.session(guildId);
     session.queue = [];
+    // Invalidate the current resource before stop() emits Idle synchronously.
+    session.playbackToken += 1;
     session.player.stop(true);
     if (session.onPlaying) {
       session.player.off(AudioPlayerStatus.Playing, session.onPlaying);
