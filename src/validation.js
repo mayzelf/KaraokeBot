@@ -40,6 +40,11 @@ function validateVolume(value) {
   return volume;
 }
 
+function validateQueueIndex(value) {
+  if (!Number.isInteger(value) || value < 0 || value > 99) throw new Error('Queue position is invalid.');
+  return value;
+}
+
 function safeYouTubeThumbnail(value) {
   if (typeof value !== 'string') return null;
   try {
@@ -50,4 +55,4 @@ function safeYouTubeThumbnail(value) {
   } catch { return null; }
 }
 
-module.exports = { isDiscordId, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateSongQuery, validateVolume };
+module.exports = { isDiscordId, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume };

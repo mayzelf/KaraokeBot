@@ -5,9 +5,11 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates \
-    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]" \
     && rm -rf /var/lib/apt/lists/*
 
+# yt-dlp's default extras include the EJS challenge-solver scripts. Node 22
+# (already provided by this image) is enabled explicitly in src/media.js.
 COPY package*.json ./
 # npm install resolves native/optional packages for the container's Linux
 # platform; npm ci rejects cross-platform lockfiles generated on Windows.

@@ -22,6 +22,11 @@ db.exec(`
     avatar TEXT,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS sessions (
+    sid TEXT PRIMARY KEY,
+    sess TEXT NOT NULL,
+    expires_at INTEGER
+  );
 `);
 
 function parseJson(value, fallback = []) {

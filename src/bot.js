@@ -26,7 +26,7 @@ async function registerCommands() {
 
 function voiceChannel(interaction) { return interaction.member?.voice?.channel || null; }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`[discord] logged in as ${client.user.tag}`);
   for (const guild of client.guilds.cache.values()) ensureGuild(guild.id, guild.name);
   karaoke.updatePresence();

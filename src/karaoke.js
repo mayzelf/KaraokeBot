@@ -135,7 +135,7 @@ class KaraokeManager {
       return;
     }
     const track = session.current;
-    track.lyrics = await findLyrics(`${track.artist} ${track.title}`);
+    track.lyrics = await findLyrics({ artist: track.artist, title: track.title });
     session.stream = createAudioStream(track);
     const resource = createAudioResource(session.stream, { inputType: StreamType.Raw, inlineVolume: true });
     resource.volume?.setVolume(getGuild(guildId)?.default_volume ?? 0.8);
@@ -205,6 +205,25 @@ class KaraokeManager {
     session.player.unpause();
   }
   skip(guildId) { return this.next(guildId); }
+  removeQueued(guildId, index) {
+    const session = this.session(guildId);
+    if (!Number.isInteger(index) || index < 0 || index >= session.queue.length) throw new Error('That queue entry no longer exists.');
+    return session.queue.splice(index, 1)[0];
+  }
+  moveQueued(guildId, from, to) {
+    const session = this.session(guildId);
+    if (![from, to].every((index) => Number.isInteger(index) && index >= 0 && index < session.queue.length)) throw new Error('That queue position no longer exists.');
+    if (from === to) return session.queue[from];
+    const [track] = session.queue.splice(from, 1);
+    session.queue.splice(to, 0, track);
+    return track;
+  }
+  clearQueue(guildId) {
+    const session = this.session(guildId);
+    const removed = session.queue.length;
+    session.queue = [];
+    return removed;
+  }
   stop(guildId) {
     const session = this.session(guildId);
     session.queue = [];

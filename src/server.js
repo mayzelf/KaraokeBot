@@ -4,15 +4,17 @@ const session = require('express-session');
 const helmet = require('helmet');
 const config = require('./config');
 const { client, karaoke, inviteUrl } = require('./bot');
+const { searchTracks } = require('./media');
 const { ensureGuild, getGuild, updateGuild, saveUser } = require('./db');
+const { SQLiteStore } = require('./session-store');
 const { createOAuthState, validOAuthState } = require('./oauth');
-const { isDiscordId, validateDiscordIdList, validateOptionalDiscordId, validateSongQuery, validateVolume } = require('./validation');
+const { isDiscordId, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume } = require('./validation');
 
 const app = express();
 if (config.publicUrl.startsWith('https://')) app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], baseUri: ["'self'"], objectSrc: ["'none'"], frameAncestors: ["'none'"], scriptSrc: ["'self'"], styleSrc: ["'self'", 'https://fonts.googleapis.com'], fontSrc: ["'self'", 'https://fonts.gstatic.com'], imgSrc: ["'self'", 'data:', 'https://cdn.discordapp.com'], connectSrc: ["'self'"], formAction: ["'self'", 'https://discord.com'] } } }));
 app.use(express.json({ limit: '100kb' }));
-app.use(session({ secret: config.sessionSecret, proxy: config.publicUrl.startsWith('https://'), resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: config.publicUrl.startsWith('https://'), maxAge: 7 * 24 * 60 * 60 * 1000 } }));
+app.use(session({ secret: config.sessionSecret, store: new SQLiteStore(), proxy: config.publicUrl.startsWith('https://'), resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: config.publicUrl.startsWith('https://'), maxAge: 7 * 24 * 60 * 60 * 1000 } }));
 app.use(express.static(path.resolve(__dirname, '..', 'public')));
 app.get('/healthz', (req, res) => res.json({ ok: true, discord: client.isReady() }));
 
@@ -90,6 +92,12 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
 app.get('/auth/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
 
 app.get('/api/me', (req, res) => res.json({ user: req.session.user || null }));
+app.get('/api/search', requireLogin, async (req, res) => {
+  try {
+    const results = await searchTracks(req.query.q);
+    res.json({ results });
+  } catch (error) { res.status(400).json({ error: error.message }); }
+});
 app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
 app.get('/api/guilds/:guildId/status', requireLogin, requireGuild, (req, res, next) => {
   const state = createOAuthState();
@@ -117,8 +125,44 @@ async function requesterVoiceMember(guild, userId) {
   const member = await guild.members.fetch(userId).catch(() => null);
   return member?.voice?.channel || null;
 }
-function control(method) { return async (req, res) => { try { const id = req.params.guildId; if (!client.guilds.cache.get(id)) return res.status(409).json({ error: 'Invite the bot to this server first.' }); const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}; const guild = client.guilds.cache.get(id); if (method === 'play') { const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel; const track = await karaoke.add(guild, validateSongQuery(body.song), voice, voice || defaultTextChannel(guild)); return res.json(track); } if (method === 'join') { const channelId = validateOptionalDiscordId(body.channelId); const voice = (channelId ? guild.channels.cache.get(channelId) : null) || await requesterVoiceMember(guild, req.session.user.id); await karaoke.join(guild, voice, voice || defaultTextChannel(guild)); return res.json({ ok: true }); } if (method === 'skip') await karaoke.skip(id); if (method === 'pause') karaoke.pause(id); if (method === 'resume') karaoke.resume(id); if (method === 'stop' || method === 'leave') karaoke[method](id); res.json({ ok: true }); } catch (error) { res.status(400).json({ error: error.message }); } }; }
-for (const [method, path] of [['play', '/api/guilds/:guildId/play'], ['join', '/api/guilds/:guildId/join'], ['skip', '/api/guilds/:guildId/skip'], ['pause', '/api/guilds/:guildId/pause'], ['resume', '/api/guilds/:guildId/resume'], ['stop', '/api/guilds/:guildId/stop'], ['leave', '/api/guilds/:guildId/leave']]) app.post(path, requireLogin, requireGuild, control(method));
+function control(method) {
+  return async (req, res) => {
+    try {
+      const id = req.params.guildId;
+      if (!client.guilds.cache.get(id)) return res.status(409).json({ error: 'Invite the bot to this server first.' });
+      const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+      const guild = client.guilds.cache.get(id);
+      if (method === 'play') {
+        const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel;
+        const track = await karaoke.add(guild, validateSongQuery(body.song), voice, voice || defaultTextChannel(guild));
+        return res.json(track);
+      }
+      if (method === 'join') {
+        const channelId = validateOptionalDiscordId(body.channelId);
+        const voice = (channelId ? guild.channels.cache.get(channelId) : null) || await requesterVoiceMember(guild, req.session.user.id);
+        await karaoke.join(guild, voice, voice || defaultTextChannel(guild));
+        return res.json({ ok: true });
+      }
+      if (method === 'remove') {
+        karaoke.removeQueued(id, validateQueueIndex(body.index));
+        return res.json({ ok: true });
+      }
+      if (method === 'move') {
+        karaoke.moveQueued(id, validateQueueIndex(body.from), validateQueueIndex(body.to));
+        return res.json({ ok: true });
+      }
+      if (method === 'clear') {
+        return res.json({ removed: karaoke.clearQueue(id) });
+      }
+      if (method === 'skip') await karaoke.skip(id);
+      if (method === 'pause') karaoke.pause(id);
+      if (method === 'resume') karaoke.resume(id);
+      if (method === 'stop' || method === 'leave') karaoke[method](id);
+      res.json({ ok: true });
+    } catch (error) { res.status(400).json({ error: error.message }); }
+  };
+}
+for (const [method, path] of [['play', '/api/guilds/:guildId/play'], ['join', '/api/guilds/:guildId/join'], ['remove', '/api/guilds/:guildId/queue/remove'], ['move', '/api/guilds/:guildId/queue/move'], ['clear', '/api/guilds/:guildId/queue/clear'], ['skip', '/api/guilds/:guildId/skip'], ['pause', '/api/guilds/:guildId/pause'], ['resume', '/api/guilds/:guildId/resume'], ['stop', '/api/guilds/:guildId/stop'], ['leave', '/api/guilds/:guildId/leave']]) app.post(path, requireLogin, requireGuild, control(method));
 
 app.get(/.*/, (req, res) => res.sendFile(path.resolve(__dirname, '..', 'public', 'index.html')));
 module.exports = { app };
