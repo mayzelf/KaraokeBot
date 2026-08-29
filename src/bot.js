@@ -6,8 +6,9 @@ const { createOAuthState } = require('./oauth');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 const karaoke = new KaraokeManager(client);
+const noMentions = { parse: [] };
 const commands = [
-  new SlashCommandBuilder().setName('play').setDescription('Play a song and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('YouTube URL or song search').setRequired(true)),
+  new SlashCommandBuilder().setName('play').setDescription('Play a song and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('YouTube URL or song search').setMaxLength(300).setRequired(true)),
   new SlashCommandBuilder().setName('join').setDescription('Join your current voice channel'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop karaoke and leave the voice channel'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
@@ -43,7 +44,7 @@ client.on('interactionCreate', async (interaction) => {
       const voice = voiceChannel(interaction);
       const track = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice);
       const lyricsMessage = track.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : track.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.';
-      return interaction.editReply(`Added **${track.title}** to the queue. ${lyricsMessage}`);
+      return interaction.editReply({ content: `Added **${track.title}** to the queue. ${lyricsMessage}`, allowedMentions: noMentions });
     }
     if (command === 'join') {
       const voice = voiceChannel(interaction);
@@ -58,13 +59,13 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'queue') {
       const status = karaoke.status(interaction.guildId);
       const songs = [status.current, ...status.queue].filter(Boolean).map((track, i) => `${i + 1}. **${track.title}**`).join('\n') || 'The queue is empty.';
-      return interaction.reply(songs);
+      return interaction.reply({ content: songs, allowedMentions: noMentions });
     }
   } catch (error) {
     console.error('[discord] command failed:', error);
     const message = error.message || 'Something went wrong.';
-    if (interaction.deferred) interaction.editReply(`❌ ${message}`).catch(() => {});
-    else if (!interaction.replied) interaction.reply({ content: `❌ ${message}`, ephemeral: true }).catch(() => {});
+    if (interaction.deferred) interaction.editReply({ content: `❌ ${message}`, allowedMentions: noMentions }).catch(() => {});
+    else if (!interaction.replied) interaction.reply({ content: `❌ ${message}`, ephemeral: true, allowedMentions: noMentions }).catch(() => {});
   }
 });
 
@@ -73,10 +74,10 @@ async function startBot() {
   await client.login(config.token);
 }
 
-const inviteUrl = (guildId) => {
+const inviteUrl = (guildId, state = createOAuthState()) => {
   const permissions = PermissionFlagsBits.ViewChannel | PermissionFlagsBits.ReadMessageHistory | PermissionFlagsBits.SendMessages | PermissionFlagsBits.EmbedLinks | PermissionFlagsBits.Connect | PermissionFlagsBits.Speak | PermissionFlagsBits.UseVAD;
   const url = new URL('https://discord.com/oauth2/authorize');
-  url.search = new URLSearchParams({ client_id: config.clientId, response_type: 'code', redirect_uri: config.redirectUri, scope: 'bot applications.commands identify guilds', permissions: permissions.toString(), state: createOAuthState(), ...(guildId ? { guild_id: guildId } : {}) });
+  url.search = new URLSearchParams({ client_id: config.clientId, response_type: 'code', redirect_uri: config.redirectUri, scope: 'bot applications.commands identify guilds', permissions: permissions.toString(), state, ...(guildId ? { guild_id: guildId } : {}) });
   return url.toString();
 };
 

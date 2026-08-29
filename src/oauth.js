@@ -7,8 +7,9 @@ function createOAuthState() {
   return `${payload}.${signature}`;
 }
 
-function validOAuthState(state) {
+function validOAuthState(state, expectedState) {
   if (typeof state !== 'string') return false;
+  if (expectedState !== undefined && state !== expectedState) return false;
   const parts = state.split('.');
   if (parts.length !== 3 || !/^[0-9a-z]{8,14}$/.test(parts[0]) || !/^[a-f0-9]{16,48}$/.test(parts[1]) || !/^[a-f0-9]{32,64}$/.test(parts[2])) return false;
   const issuedAt = parseInt(parts[0], 36);

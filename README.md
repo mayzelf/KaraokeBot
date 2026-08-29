@@ -44,6 +44,10 @@ Blank allow-lists mean “all”. Users with **Manage Server** can always contro
 
 For a public deployment, set `PUBLIC_URL` to the HTTPS URL users will open and add `${PUBLIC_URL}/auth/callback` to the Discord OAuth2 redirect URLs. Put the dashboard behind HTTPS; the application marks the session cookie secure automatically when `PUBLIC_URL` starts with `https://`.
 
+## Security safeguards
+
+Dashboard input is validated again on the server, even when requests do not come from the web interface. Song URLs are restricted to YouTube, Discord IDs and volume values are validated and bounded, request rates are limited, OAuth state is bound to the browser session, dynamic page values are rendered safely, and a restrictive Content Security Policy blocks inline scripts. Set a strong `SESSION_SECRET` of at least 32 characters for production deployments.
+
 ## Notes
 
 - Audio is obtained from the URL/search provider selected by `yt-dlp`; only use sources and music you are allowed to access and play.

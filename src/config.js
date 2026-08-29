@@ -5,6 +5,7 @@ const required = ['DISCORD_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET',
 for (const key of required) {
   if (!process.env[key]) console.warn(`[config] ${key} is not set. The related feature will not work until it is configured.`);
 }
+if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)) throw new Error('SESSION_SECRET must be set to at least 32 characters in production.');
 
 const publicUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
 

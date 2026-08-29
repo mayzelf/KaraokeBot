@@ -12,6 +12,13 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]));
 }
 
+function safeInviteUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'discord.com' && url.pathname === '/oauth2/authorize' ? url.toString() : null;
+  } catch { return null; }
+}
+
 async function init() {
   const me = await api('/api/me');
   if (!me.user) return;
@@ -35,7 +42,9 @@ function renderGuilds() {
     const icon = node.querySelector('.guild-icon');
     if (guild.iconUrl) {
       icon.classList.add('has-image');
-      icon.style.backgroundImage = `url("${guild.iconUrl}")`;
+      const image = node.querySelector('.guild-image');
+      image.src = guild.iconUrl;
+      image.alt = `${guild.name} icon`;
     }
     node.querySelector('.guild-status').textContent = `${guild.accessLabel} · ${guild.botPresent ? 'Bot online' : 'Bot not installed'}`;
     node.querySelector('.guild-card').onclick = () => selectGuild(guild);
@@ -51,7 +60,7 @@ async function selectGuild(guild) {
   workspace.innerHTML = `<div class="workspace-top"><button class="back" id="back">← All stages</button><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE A TRACK</div><h3>Play a song</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="search-row"><input class="input" id="song" placeholder="Search a song or paste a YouTube URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div>
+        <div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search a song or paste a YouTube URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat.</p><div id="notice" class="notice"></div>
       </div>
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">ROOM CONTROLS</div><h3>Playback</h3></div><span class="panel-symbol">♪</span></div>
@@ -66,7 +75,7 @@ async function selectGuild(guild) {
       <div class="save-row"><button class="control control-accent save" id="save">Save settings</button><div id="settings-notice" class="notice"></div></div>
     </div>`;
   $('#back').onclick = () => { workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); };
-  const settings = await api(`/api/guilds/${guild.id}/settings`);
+  const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`);
   fillSettings(settings);
   await loadChannels(guild);
   bindControls(guild);
@@ -76,8 +85,10 @@ async function selectGuild(guild) {
 
 async function loadChannels(guild) {
   try {
-    const channels = await api(`/api/guilds/${guild.id}/channels`);
-    $('#voice-channel').innerHTML = '<option value="">Use my current channel</option>' + channels.filter((c) => c.type === 'voice').map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+    const channels = await api(`/api/guilds/${encodeURIComponent(guild.id)}/channels`);
+    const select = $('#voice-channel');
+    select.replaceChildren(new Option('Use my current channel', ''));
+    channels.filter((channel) => channel.type === 'voice').forEach((channel) => select.add(new Option(channel.name, channel.id)));
   } catch {}
 }
 
@@ -111,24 +122,52 @@ function bindTagInput(type) {
 function fillSettings(settings) { tagState.voice = [...settings.allowedVoiceChannels]; tagState.text = [...settings.allowedTextChannels]; tagState.roles = [...settings.allowedRoles]; renderTags('voice'); renderTags('text'); renderTags('roles'); $('#volume').value = settings.default_volume; $('#volume-value').textContent = `${Math.round(Number(settings.default_volume) * 100)}%`; }
 
 function bindControls(guild) {
-  const action = async (name, body = {}) => { try { await api(`/api/guilds/${guild.id}/${name}`, { method: 'POST', body: JSON.stringify(body) }); refresh(guild); } catch (error) { $('#notice').textContent = error.message; } };
+  const guildPath = (name) => `/api/guilds/${encodeURIComponent(guild.id)}/${name}`;
+  const action = async (name, body = {}) => { try { await api(guildPath(name), { method: 'POST', body: JSON.stringify(body) }); refresh(guild); } catch (error) { $('#notice').textContent = error.message; } };
   $('#play').onclick = () => { if ($('#song').value.trim()) action('play', { song: $('#song').value }); };
   $('#join').onclick = () => action('join', { channelId: $('#voice-channel').value || null });
   $('#resume').onclick = () => action('resume'); $('#pause').onclick = () => action('pause'); $('#skip').onclick = () => action('skip'); $('#stop').onclick = () => action('stop');
   $('#volume').oninput = () => { $('#volume-value').textContent = `${Math.round(Number($('#volume').value) * 100)}%`; };
   bindTagInput('voice'); bindTagInput('text'); bindTagInput('roles');
-  $('#save').onclick = async () => { try { ['voice', 'text', 'roles'].forEach((type) => { const input = $(`#${tagIds[type]}-entry`); if (input.value.trim()) { addTags(type, input.value); input.value = ''; } }); const settings = await api(`/api/guilds/${guild.id}/settings`, { method: 'PUT', body: JSON.stringify({ allowedVoiceChannels: tagState.voice, allowedTextChannels: tagState.text, allowedRoles: tagState.roles, defaultVolume: $('#volume').value }) }); fillSettings(settings); $('#settings-notice').textContent = 'Saved.'; } catch (error) { $('#settings-notice').textContent = error.message; } };
+  $('#save').onclick = async () => { try { ['voice', 'text', 'roles'].forEach((type) => { const input = $(`#${tagIds[type]}-entry`); if (input.value.trim()) { addTags(type, input.value); input.value = ''; } }); const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`, { method: 'PUT', body: JSON.stringify({ allowedVoiceChannels: tagState.voice, allowedTextChannels: tagState.text, allowedRoles: tagState.roles, defaultVolume: $('#volume').value }) }); fillSettings(settings); $('#settings-notice').textContent = 'Saved.'; } catch (error) { $('#settings-notice').textContent = error.message; } };
 }
 
 async function refresh(guild) {
   try {
-    const data = await api(`/api/guilds/${guild.id}/status`);
+    const data = await api(`/api/guilds/${encodeURIComponent(guild.id)}/status`);
     const status = $('#status');
     if (!status) return;
     status.textContent = data.botPresent ? (data.status.connected ? 'Live in voice' : 'Bot online') : 'Bot not installed';
     status.className = `status-pill${data.status.connected ? ' live' : ''}`;
     $('#resume').textContent = data.status.paused ? 'Resume' : 'Play';
-    $('#now').innerHTML = data.status.current ? `<strong>${data.status.paused ? 'Paused' : 'Now playing'}</strong><br>${escapeHtml(data.status.current.title)}<br><br>${data.status.queue.length ? `${data.status.queue.length} song(s) waiting` : 'Queue is empty'}` : (data.botPresent ? 'Nothing is playing. Add a track above.' : `<div class="invite-card"><div><p>Ready to start singing?</p><small>Install the bot in this server</small></div><a class="control" href="${data.inviteUrl}">Invite bot ↗</a></div>`);
+    const now = $('#now');
+    now.replaceChildren();
+    if (data.status.current) {
+      const label = document.createElement('strong');
+      label.textContent = data.status.paused ? 'Paused' : 'Now playing';
+      now.append(label, document.createElement('br'));
+      now.append(document.createTextNode(data.status.current.title), document.createElement('br'), document.createElement('br'));
+      now.append(document.createTextNode(data.status.queue.length ? `${data.status.queue.length} song(s) waiting` : 'Queue is empty'));
+    } else if (data.botPresent) {
+      now.textContent = 'Nothing is playing. Add a track above.';
+    } else {
+      const card = document.createElement('div');
+      card.className = 'invite-card';
+      const copy = document.createElement('div');
+      const title = document.createElement('p');
+      title.textContent = 'Ready to start singing?';
+      const detail = document.createElement('small');
+      detail.textContent = 'Install the bot in this server';
+      copy.append(title, detail);
+      const link = document.createElement('a');
+      link.className = 'control';
+      const inviteUrl = safeInviteUrl(data.inviteUrl);
+      if (!inviteUrl) return;
+      link.href = inviteUrl;
+      link.textContent = 'Invite bot ↗';
+      card.append(copy, link);
+      now.append(card);
+    }
   } catch {}
 }
 

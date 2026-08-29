@@ -7,4 +7,5 @@
 
 .guild-icon.has-image:before{content:''}
 .guild-icon{background-position:center;background-repeat:no-repeat;background-size:contain}
+.guild-image{display:block;width:100%;height:100%;object-fit:contain}
 .tag-input{display:flex;flex-wrap:wrap;align-items:center;gap:7px;min-height:47px;padding:7px 10px;border:1px solid var(--line);border-radius:11px;background:#fff;transition:border-color .18s,box-shadow .18s}.tag-input:focus-within{border-color:#a482e5;box-shadow:0 0 0 4px #7044db12}.tag-list{display:contents}.id-tag{display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:7px 8px 7px 10px;border-radius:8px;background:#eee9fa;color:var(--ink);font:11px 'DM Mono',monospace}.id-tag button{display:grid;place-items:center;width:17px;height:17px;padding:0;border:0;border-radius:50%;background:#d8c8f3;color:var(--purple);font:700 14px/1 Manrope;cursor:pointer}.id-tag button:hover{background:var(--purple);color:#fff}.tag-entry{flex:1;min-width:180px;border:0;outline:0;background:transparent;color:var(--ink);font:12px Manrope;padding:5px 2px}.tag-entry::placeholder{color:#aaa4b0}.tag-input + .field-note{margin-top:6px}

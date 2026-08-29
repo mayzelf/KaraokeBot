@@ -1,4 +1,5 @@
 const { spawn } = require('node:child_process');
+const { safeYouTubeThumbnail, validateSongQuery } = require('./validation');
 
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
@@ -13,17 +14,19 @@ function runYtDlp(args) {
 }
 
 async function resolveTrack(query) {
-  const target = /^https?:\/\//i.test(query) ? query : `ytsearch1:${query}`;
+  const cleanQuery = validateSongQuery(query);
+  const target = /^https?:\/\//i.test(cleanQuery) ? cleanQuery : `ytsearch1:${cleanQuery}`;
   const output = await runYtDlp(['--dump-single-json', '--no-playlist', '--skip-download', target]);
   const data = JSON.parse(output);
-  if (!data.webpage_url && !data.url) throw new Error('No playable result was found.');
+  if (!data.webpage_url || !data.id) throw new Error('No playable YouTube result was found.');
+  const playableUrl = validateSongQuery(data.webpage_url);
   return {
     id: data.id,
-    url: data.webpage_url || data.original_url || query,
-    title: data.title || query,
-    artist: data.artist || data.uploader || '',
+    url: playableUrl,
+    title: String(data.title || cleanQuery).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200),
+    artist: String(data.artist || data.uploader || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120),
     duration: Number(data.duration || 0),
-    thumbnail: data.thumbnail || null
+    thumbnail: safeYouTubeThumbnail(data.thumbnail)
   };
 }
 

@@ -6,6 +6,7 @@ const { ActivityType, EmbedBuilder } = require('discord.js');
 const { ensureGuild, getGuild } = require('./db');
 const { resolveTrack, createAudioStream } = require('./media');
 const { findLyrics, currentLine } = require('./lyrics');
+const noMentions = { parse: [] };
 
 class KaraokeManager {
   constructor(client) {
@@ -110,7 +111,7 @@ class KaraokeManager {
         .setURL(track.url);
       if (index === 0 && track.thumbnail) embed.setThumbnail(track.thumbnail);
       if (index === 0 && notice) embed.setFooter({ text: `${notice} · Complete lyrics · not synchronized` });
-      const message = await session.textChannel.send({ embeds: [embed] }).catch(() => null);
+      const message = await session.textChannel.send({ embeds: [embed], allowedMentions: noMentions }).catch(() => null);
       if (message) messages.push(message);
     }
     session.lyricMessage = messages[0] || null;
@@ -155,11 +156,11 @@ class KaraokeManager {
         if (track.thumbnail) embed.setThumbnail(track.thumbnail);
         if (notice) embed.setFooter({ text: notice });
         else if (firstLine) embed.setFooter({ text: 'Synchronized lyrics · starting playback' });
-        session.lyricMessage = await session.textChannel.send({ embeds: [embed] }).catch(() => null);
+        session.lyricMessage = await session.textChannel.send({ embeds: [embed], allowedMentions: noMentions }).catch(() => null);
       }
     }
     if (!track.lyrics && session.lyricMessage) {
-      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('Lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no lyrics were found for this track.`).setURL(track.url)] }).catch(() => {});
+      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('Lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no lyrics were found for this track.`).setURL(track.url)], allowedMentions: noMentions }).catch(() => {});
     }
     // Register the listener and post the initial message before starting audio,
     // otherwise a fast player can emit Playing before lyrics are ready to update.
@@ -185,7 +186,7 @@ class KaraokeManager {
     const current = lines[index]?.text || '';
     const next = lines[index + 1]?.text || '';
     const embed = new EmbedBuilder().setColor(0xec4899).setTitle('🎤 Karaoke').setDescription(`**${session.current.title}**\n\n${previous ? `~~${previous}~~\n` : ''}## ${current}\n${next ? `\n${next}` : ''}`).setFooter({ text: `Synchronized lyrics · ${session.current.lyrics.source}` });
-    await session.lyricMessage.edit({ embeds: [embed] }).catch(() => {});
+    await session.lyricMessage.edit({ embeds: [embed], allowedMentions: noMentions }).catch(() => {});
   }
 
   status(guildId) {
