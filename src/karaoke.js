@@ -33,15 +33,18 @@ class KaraokeManager {
     if (!this.sessions.has(guildId)) this.sessions.set(guildId, {
       queue: [], connection: null, player: createAudioPlayer(), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
-      startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null
+      startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
+      nextPromise: null
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
       session.bound = true;
-      session.player.on(AudioPlayerStatus.Idle, () => this.next(guildId));
+      session.player.on(AudioPlayerStatus.Idle, () => {
+        this.next(guildId).catch((error) => console.error(`[audio:${guildId}]`, error.message));
+      });
       session.player.on('error', (error) => {
         console.error(`[audio:${guildId}]`, error.message);
-        this.next(guildId, 'Playback failed, skipping this track.');
+        this.next(guildId, 'Playback failed, skipping this track.').catch((nextError) => console.error(`[audio:${guildId}]`, nextError.message));
       });
     }
     return session;
@@ -125,6 +128,18 @@ class KaraokeManager {
   }
 
   async next(guildId, notice) {
+    const session = this.session(guildId);
+    // Stopping a stream can emit Idle while a replacement track is still
+    // loading. Share one transition so that event-driven and manual skips
+    // cannot advance the queue more than once.
+    if (session.nextPromise) return session.nextPromise;
+    const transition = Promise.resolve().then(() => this.advance(guildId, notice));
+    session.nextPromise = transition;
+    try { return await transition; }
+    finally { if (session.nextPromise === transition) session.nextPromise = null; }
+  }
+
+  async advance(guildId, notice) {
     const session = this.session(guildId);
     if (session.stream?.destroyChildren) session.stream.destroyChildren();
     if (session.lyricTimer) clearInterval(session.lyricTimer);
@@ -219,11 +234,14 @@ class KaraokeManager {
     if (!session.current) throw new Error('There is no active song to skip.');
     const activeChannelId = session.voiceChannelId || guild.members.me?.voice?.channelId || null;
     const member = requesterId ? await guild.members.fetch(requesterId).catch(() => null) : null;
-    if (!member?.voice?.channelId || member.voice.channelId !== activeChannelId) throw new Error('Join my active voice channel before skipping a song.');
+    const isAdministrator = member?.permissions?.has?.('Administrator') === true;
+    if (!isAdministrator && (!member?.voice?.channelId || member.voice.channelId !== activeChannelId)) throw new Error('Join my active voice channel before skipping a song.');
     // A track belongs to the person who queued it. That person can skip it
     // immediately; everyone else must wait until its requester has left the
     // active room, which prevents strangers from removing another singer's song.
-    if (session.current.requestedBy !== requesterId) {
+    // Members with the Discord Administrator permission can always skip,
+    // including when they are not currently in the active voice channel.
+    if (!isAdministrator && session.current.requestedBy !== requesterId) {
       const owner = session.current.requestedBy ? await guild.members.fetch(session.current.requestedBy).catch(() => null) : null;
       if (owner?.voice?.channelId === activeChannelId) throw new Error('Only the person who queued this song can skip it while they are still in the room.');
     }

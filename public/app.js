@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0 };
+const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0 };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -94,6 +94,7 @@ function renderGuilds() {
 
 async function selectGuild(guild) {
   state.selected = guild;
+  const viewRequest = ++state.viewRequest;
   $('#guilds').classList.add('hidden');
   const workspace = $('#workspace');
   workspace.classList.remove('hidden');
@@ -125,14 +126,14 @@ async function selectGuild(guild) {
   const libraryUploadForm = $('#library-upload');
   libraryUploadForm.querySelectorAll('input, button').forEach((control) => { control.disabled = !libraryUploadEnabled; });
   if (!libraryUploadEnabled) $('#library-notice').textContent = 'Song uploads are disabled. Set LIBRARY_UPLOADS_ENABLED=true to enable them.';
-  $('#back').onclick = () => { workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); clearTimeout(state.searchTimer); state.selectedTrack = null; };
+  $('#back').onclick = () => { state.viewRequest += 1; workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); clearTimeout(state.searchTimer); state.selectedTrack = null; };
   const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`);
   fillSettings(settings);
   await loadChannels(guild);
   bindControls(guild);
   await loadLibrary(guild);
-  refresh(guild);
-  state.timer = setInterval(() => refresh(guild), 3000);
+  refresh(guild, viewRequest);
+  state.timer = setInterval(() => refresh(guild, viewRequest), 3000);
 }
 
 async function loadChannels(guild) {
@@ -490,7 +491,7 @@ function bindSearch() {
 
 function bindControls(guild) {
   const guildPath = (name) => `/api/guilds/${encodeURIComponent(guild.id)}/${name}`;
-  const action = async (name, body = {}) => { try { await api(guildPath(name), { method: 'POST', body: JSON.stringify(body) }); refresh(guild); } catch (error) { $('#notice').textContent = error.message; } };
+  const action = async (name, body = {}) => { try { await api(guildPath(name), { method: 'POST', body: JSON.stringify(body) }); refresh(guild, state.viewRequest); } catch (error) { $('#notice').textContent = error.message; } };
   $('#play').onclick = () => { const query = state.selectedTrack?.url || $('#song').value.trim(); if (query) action('play', { song: query }); };
   $('#join').onclick = () => action('join', { channelId: $('#voice-channel').value || null });
   $('#resume').onclick = () => action('resume'); $('#pause').onclick = () => action('pause'); $('#skip').onclick = () => action('skip'); $('#stop').onclick = () => action('stop');
@@ -502,9 +503,11 @@ function bindControls(guild) {
   $('#save').onclick = async () => { try { ['voice', 'text', 'roles'].forEach((type) => { const input = $(`#${tagIds[type]}-entry`); if (input.value.trim()) { addTags(type, input.value); input.value = ''; } }); const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`, { method: 'PUT', body: JSON.stringify({ allowedVoiceChannels: tagState.voice, allowedTextChannels: tagState.text, allowedRoles: tagState.roles, defaultVolume: $('#volume').value }) }); fillSettings(settings); $('#settings-notice').textContent = 'Saved.'; } catch (error) { $('#settings-notice').textContent = error.message; } };
 }
 
-async function refresh(guild) {
+async function refresh(guild, viewRequest = state.viewRequest) {
+  const refreshRequest = ++state.refreshRequest;
   try {
     const data = await api(`/api/guilds/${encodeURIComponent(guild.id)}/status`);
+    if (viewRequest !== state.viewRequest || refreshRequest !== state.refreshRequest || state.selected !== guild) return;
     const status = $('#status');
     if (!status) return;
     status.textContent = data.botPresent ? (data.status.connected ? 'Live in voice' : 'Bot online') : 'Bot not installed';
