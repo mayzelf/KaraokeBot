@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, timer: null, searchTimer: null, searchRequest: 0 };
+const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0 };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -100,7 +100,7 @@ async function selectGuild(guild) {
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE A TRACK</div><h3>Play a song</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search a song or paste a YouTube or SoundCloud URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a YouTube URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat.</p><div id="notice" class="notice"></div>
         <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue"></div>
       </div>
@@ -405,7 +405,14 @@ function renderQueue(queue, guild) {
 function renderSearchResults(results) {
   const container = $('#search-results');
   container.replaceChildren();
-  if (!results.length) { container.classList.add('hidden'); return; }
+  if (!results.length) {
+    const empty = document.createElement('div');
+    empty.className = 'search-empty';
+    empty.textContent = `No ${state.searchProvider === 'soundcloud' ? 'SoundCloud' : 'YouTube'} results. Try the other tab.`;
+    container.append(empty);
+    container.classList.remove('hidden');
+    return;
+  }
   results.forEach((track) => {
     const option = document.createElement('button');
     option.type = 'button';
@@ -431,32 +438,48 @@ function renderSearchResults(results) {
   });
   container.classList.remove('hidden');
 }
+function updateSearchProvider() {
+  const isSoundCloud = state.searchProvider === 'soundcloud';
+  document.querySelectorAll('.provider-tab').forEach((button) => {
+    const active = button.id === `provider-${state.searchProvider}`;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  $('#song').placeholder = isSoundCloud ? 'Search SoundCloud or paste a SoundCloud URL' : 'Search YouTube or paste a YouTube URL';
+}
 function updatePlayButton() {
   const value = $('#song').value.trim();
   $('#play').disabled = !state.selectedTrack && !/^https?:\/\//i.test(value);
 }
 function bindSearch() {
   const input = $('#song');
-  input.addEventListener('input', () => {
-    state.selectedTrack = null;
-    $('#notice').textContent = '';
-    updatePlayButton();
+  const scheduleSearch = () => {
     clearTimeout(state.searchTimer);
     const request = ++state.searchRequest;
     const query = input.value.trim();
+    const provider = state.searchProvider;
     if (query.length < 2 || /^https?:\/\//i.test(query)) { $('#search-results').classList.add('hidden'); return; }
     state.searchTimer = setTimeout(async () => {
       try {
-        const data = await api(`/api/search?q=${encodeURIComponent(query)}`);
-        if (request === state.searchRequest && input.value.trim() === query) renderSearchResults(data.results || []);
+        const data = await api(`/api/search?q=${encodeURIComponent(query)}&provider=${encodeURIComponent(provider)}`);
+        if (request === state.searchRequest && input.value.trim() === query && state.searchProvider === provider) renderSearchResults(data.results || []);
       } catch (error) {
         if (request === state.searchRequest) { $('#search-results').classList.add('hidden'); $('#notice').textContent = error.message; }
       }
     }, 350);
+  };
+  input.addEventListener('input', () => {
+    state.selectedTrack = null;
+    $('#notice').textContent = '';
+    updatePlayButton();
+    scheduleSearch();
   });
   input.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && state.selectedTrack) { event.preventDefault(); $('#play').click(); }
   });
+  $('#provider-youtube').onclick = () => { state.searchProvider = 'youtube'; state.selectedTrack = null; updateSearchProvider(); updatePlayButton(); scheduleSearch(); };
+  $('#provider-soundcloud').onclick = () => { state.searchProvider = 'soundcloud'; state.selectedTrack = null; updateSearchProvider(); updatePlayButton(); scheduleSearch(); };
+  updateSearchProvider();
   updatePlayButton();
 }
 

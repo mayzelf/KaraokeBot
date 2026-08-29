@@ -105,17 +105,31 @@ async function searchSoundCloud(cleanQuery) {
   return (Array.isArray(data.entries) ? data.entries : []).map(previewSoundCloud).filter(Boolean);
 }
 
-async function pipedRequest(endpoint, params = {}) {
-  if (!config.pipedApiUrl) throw new Error('Piped is not configured.');
-  const url = new URL(`${config.pipedApiUrl}${endpoint}`);
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Piped returned HTTP ${response.status}.`);
-  return response.json();
+async function pipedRequest(endpoint, params = {}, isUsable = () => true) {
+  if (!config.pipedApiUrls.length) throw new Error('Piped is not configured.');
+  let lastError;
+  for (const apiUrl of config.pipedApiUrls) {
+    try {
+      const url = new URL(`${apiUrl}${endpoint}`);
+      Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+      const response = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { accept: 'application/json' } });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (!isUsable(data)) throw new Error('response did not contain usable data');
+      return data;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[piped] ${apiUrl} failed: ${error.message}`);
+    }
+  }
+  throw new Error(`All configured Piped instances failed. Last error: ${lastError?.message || 'unknown error'}`);
 }
 
 async function searchPiped(cleanQuery) {
-  const data = await pipedRequest('/search', { q: cleanQuery, filter: 'videos' });
+  const data = await pipedRequest('/search', { q: cleanQuery, filter: 'videos' }, (value) => {
+    const items = Array.isArray(value) ? value : value?.items;
+    return Array.isArray(items) && items.some((item) => (item.type === undefined || item.type === 'stream') && youtubeId(item.url || item.id || item.videoId));
+  });
   return (Array.isArray(data) ? data : data.items || []).filter((item) => item.type === undefined || item.type === 'stream').map((item) => previewYouTube({
     id: item.url || item.id || item.videoId,
     title: item.title,
@@ -135,18 +149,21 @@ function uniqueTracks(tracks) {
   });
 }
 
-async function searchTracks(query) {
+async function searchTracks(query, provider = 'youtube') {
   const cleanQuery = validateSongQuery(query);
   if (/^https?:\/\//i.test(cleanQuery)) return [];
-  const attempts = await Promise.allSettled([searchYouTube(cleanQuery), searchSoundCloud(cleanQuery)]);
-  const youtube = attempts[0].status === 'fulfilled' ? attempts[0].value : [];
-  const soundCloud = attempts[1].status === 'fulfilled' ? attempts[1].value : [];
-  let piped = [];
-  if (!youtube.length && config.pipedApiUrl) piped = await searchPiped(cleanQuery).catch(() => []);
-  const results = uniqueTracks([...youtube, ...soundCloud, ...piped]);
-  if (results.length) return results;
-  const failure = attempts.find((attempt) => attempt.status === 'rejected');
-  throw failure?.reason || new Error('No playable result was found.');
+  if (!['youtube', 'soundcloud'].includes(provider)) throw new Error('That search provider is not supported.');
+  if (provider === 'soundcloud') return uniqueTracks(await searchSoundCloud(cleanQuery));
+  let youtubeError;
+  try {
+    const youtube = uniqueTracks(await searchYouTube(cleanQuery));
+    if (youtube.length) return youtube;
+  } catch (error) { youtubeError = error; }
+  if (config.pipedApiUrls.length) {
+    const piped = uniqueTracks(await searchPiped(cleanQuery).catch(() => []));
+    if (piped.length) return piped;
+  }
+  throw youtubeError || new Error('No YouTube results were found.');
 }
 
 function addPrivateStreamUrl(track, streamUrl) {
@@ -157,7 +174,7 @@ function addPrivateStreamUrl(track, streamUrl) {
 async function resolvePipedTrack(url, fallbackTitle = 'YouTube track') {
   const id = youtubeId(url);
   if (!id) throw new Error('Piped could not identify that YouTube video.');
-  const data = await pipedRequest(`/streams/${encodeURIComponent(id)}`);
+  const data = await pipedRequest(`/streams/${encodeURIComponent(id)}`, {}, (value) => (value.audioStreams || []).some((stream) => stream.url && !stream.videoOnly));
   const audio = (data.audioStreams || []).filter((stream) => stream.url && !stream.videoOnly).sort((left, right) => Number(right.bitrate || 0) - Number(left.bitrate || 0))[0];
   if (!audio) throw new Error('Piped did not return a playable audio stream.');
   const track = {
@@ -196,14 +213,14 @@ async function resolveTrack(query) {
   if (isSoundCloudUrl(cleanQuery)) return resolveWithYtDlp(cleanQuery, cleanQuery, 'soundcloud');
   if (isYouTubeUrl(cleanQuery)) {
     try { return await resolveWithYtDlp(cleanQuery, cleanQuery, 'youtube'); }
-    catch (error) { if (config.pipedApiUrl) return resolvePipedTrack(cleanQuery, cleanQuery).catch(() => { throw error; }); throw error; }
+    catch (error) { if (config.pipedApiUrls.length) return resolvePipedTrack(cleanQuery, cleanQuery).catch(() => { throw error; }); throw error; }
   }
   let youtubeError;
   try { return await resolveWithYtDlp(`ytsearch1:${cleanQuery}`, cleanQuery, 'youtube'); }
   catch (error) { youtubeError = error; }
   try { return await resolveWithYtDlp(`scsearch1:${cleanQuery}`, cleanQuery, 'soundcloud'); }
   catch (soundCloudError) {
-    if (config.pipedApiUrl) {
+    if (config.pipedApiUrls.length) {
       try {
         const results = await searchPiped(cleanQuery);
         if (results[0]) return resolvePipedTrack(results[0].url, results[0].title);

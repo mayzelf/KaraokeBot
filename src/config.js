@@ -8,6 +8,10 @@ for (const key of required) {
 if (process.env.NODE_ENV === 'production' && (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)) throw new Error('SESSION_SECRET must be set to at least 32 characters in production.');
 
 const publicUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
+const pipedApiUrls = (process.env.PIPED_API_URLS || process.env.PIPED_API_URL || '')
+  .split(',')
+  .map((value) => value.trim().replace(/\/$/, ''))
+  .filter(Boolean);
 const gigabytes = (value, fallback) => {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed * 1024 * 1024 * 1024) : Math.floor(fallback * 1024 * 1024 * 1024);
@@ -36,5 +40,5 @@ module.exports = {
   libraryMaxUploadBytes: megabytes(process.env.LIBRARY_MAX_UPLOAD_MB, 50),
   libraryMaxUserBytes: gigabytes(process.env.LIBRARY_MAX_USER_GB, 1),
   libraryMaxGuildBytes: gigabytes(process.env.LIBRARY_MAX_GUILD_GB, 5),
-  pipedApiUrl: (process.env.PIPED_API_URL || '').replace(/\/$/, '')
+  pipedApiUrls
 };

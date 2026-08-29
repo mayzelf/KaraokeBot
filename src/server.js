@@ -99,7 +99,7 @@ app.get('/auth/logout', (req, res) => req.session.destroy(() => res.redirect('/'
 app.get('/api/me', (req, res) => res.json({ user: req.session.user || null }));
 app.get('/api/search', requireLogin, async (req, res) => {
   try {
-    const results = await searchTracks(req.query.q);
+    const results = await searchTracks(req.query.q, typeof req.query.provider === 'string' ? req.query.provider : 'youtube');
     res.json({ results });
   } catch (error) { res.status(400).json({ error: error.message }); }
 });

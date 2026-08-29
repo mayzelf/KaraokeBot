@@ -10,7 +10,7 @@ services:
     environment:
       YTDLP_PLAYER_CLIENT: mweb
       YTDLP_POT_PROVIDER_URL: http://bgutil-provider:4416
-      PIPED_API_URL: ${PIPED_API_URL-https://pipedapi.kavin.rocks}
+      PIPED_API_URLS: ${PIPED_API_URLS-https://pipedapi.kavin.rocks,https://pipedapi.leptons.xyz,https://pipedapi.nosebs.ru,https://pipedapi-libre.kavin.rocks,https://piped-api.privacy.com.de,https://pipedapi.adminforge.de,https://api.piped.yt}
     ports:
       - "127.0.0.1:${HOST_PORT:-3010}:3000"
     volumes:
