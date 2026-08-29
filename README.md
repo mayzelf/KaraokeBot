@@ -60,7 +60,7 @@ The application is built with and gives credit to these direct dependencies:
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org/) — external runtime tools included by the Docker image under their respective upstream terms.
 - [LRCLIB](https://lrclib.net/) — the external lyrics service used for timed and unsynchronized lyric lookups. Lyrics remain subject to the rights and terms of their respective owners.
 
-The public source repository is [github.com/mayzelf/karaoke-bot](https://github.com/mayzelf/karaoke-bot). Please keep secrets in `.env`; the repository intentionally contains only `.env.example` with placeholders.
+The public source repository is [github.com/mayzelf/KaraokeBot](https://github.com/mayzelf/KaraokeBot). Please keep secrets in `.env`; the repository intentionally contains only `.env.example` with placeholders.
 
 ## Notes
 
