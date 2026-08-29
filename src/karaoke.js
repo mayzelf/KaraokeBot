@@ -63,7 +63,7 @@ class KaraokeManager {
       queue: [], connection: null, player: createAudioPlayer(), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
       startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
-      nextPromise: null
+      lastCompleted: null, nextPromise: null
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
@@ -156,6 +156,21 @@ class KaraokeManager {
     session.lyricMessage = messages[0] || null;
   }
 
+  async markSongEnded(message, track, nextTrack) {
+    if (!message || !track) return;
+    const nextDescription = nextTrack
+      ? `\n\n**Up next:** ${nextTrack.title}`
+      : '\n\nUse `/play` to add another song.';
+    const embed = new EmbedBuilder()
+      .setColor(0x70b83d)
+      .setTitle('🎤 Song ended')
+      .setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}\n\nThanks for singing!${nextDescription}`)
+      .setFooter({ text: nextTrack ? 'Playback complete · Up next' : 'Playback complete · Queue finished' });
+    if (track.url) embed.setURL(track.url);
+    if (track.thumbnail) embed.setThumbnail(track.thumbnail);
+    await message.edit({ content: null, embeds: [embed], allowedMentions: noMentions }).catch(() => {});
+  }
+
   async next(guildId, notice) {
     const session = this.session(guildId);
     // Stopping a stream can emit Idle while a replacement track is still
@@ -170,10 +185,12 @@ class KaraokeManager {
 
   async advance(guildId, notice) {
     const session = this.session(guildId);
+    const previousTrack = session.current;
     if (session.stream?.destroyChildren) session.stream.destroyChildren();
     if (session.lyricTimer) clearInterval(session.lyricTimer);
     session.lyricTimer = null;
     session.current = session.queue.shift() || null;
+    if (previousTrack) session.lastCompleted = previousTrack;
     this.updatePresence();
     session.startedAt = 0;
     session.pausedAt = 0;
@@ -181,8 +198,8 @@ class KaraokeManager {
     session.lastLine = null;
     const previousLyricMessage = session.lyricMessage;
     session.lyricMessage = null;
+    if (previousLyricMessage && previousTrack) await this.markSongEnded(previousLyricMessage, previousTrack, session.current);
     if (!session.current) {
-      if (previousLyricMessage) await previousLyricMessage.edit({ content: '🎤 Queue finished. Use `/play` to add another song.' }).catch(() => {});
       return;
     }
     const track = session.current;
@@ -245,7 +262,7 @@ class KaraokeManager {
 
   status(guildId) {
     const session = this.session(guildId);
-    return { connected: Boolean(session.connection), current: session.current, queue: session.queue, paused: session.player.state.status === AudioPlayerStatus.Paused, elapsed: this.elapsed(session) };
+    return { connected: Boolean(session.connection), current: session.current, lastCompleted: session.lastCompleted, queue: session.queue, paused: session.player.state.status === AudioPlayerStatus.Paused, elapsed: this.elapsed(session) };
   }
 
   pause(guildId) {
@@ -306,6 +323,8 @@ class KaraokeManager {
     session.connection = null;
     session.voiceChannelId = null;
     session.current = null;
+    session.lastCompleted = null;
+    session.lyricMessage = null;
     this.updatePresence();
   }
   leave(guildId) { this.stop(guildId); }

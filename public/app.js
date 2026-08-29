@@ -338,6 +338,55 @@ function renderNowPlaying(current, paused, elapsed = 0) {
   now.append(card);
 }
 
+function renderPlaybackEnded(lastCompleted) {
+  const now = $('#now');
+  now.replaceChildren();
+  now.classList.remove('now-empty');
+
+  const card = document.createElement('article');
+  card.className = 'now-playing-card is-ended';
+  const artwork = document.createElement('div');
+  artwork.className = 'now-playing-artwork';
+  const fallback = document.createElement('span');
+  fallback.className = 'now-playing-artwork-fallback';
+  fallback.setAttribute('aria-hidden', 'true');
+  fallback.textContent = '✓';
+  artwork.append(fallback);
+  if (lastCompleted?.thumbnail) {
+    const image = document.createElement('img');
+    image.src = lastCompleted.thumbnail;
+    image.alt = `Cover art for ${lastCompleted.title || 'the finished song'}`;
+    image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
+    image.onerror = () => image.remove();
+    artwork.append(image);
+  }
+
+  const copy = document.createElement('div');
+  copy.className = 'now-playing-copy';
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'now-playing-eyebrow';
+  const label = document.createElement('span');
+  label.textContent = 'Playback complete';
+  const stateLabel = document.createElement('span');
+  stateLabel.className = 'now-playing-state';
+  stateLabel.textContent = 'ENDED';
+  eyebrow.append(label, stateLabel);
+  const heading = document.createElement('h4');
+  heading.textContent = 'Song ended';
+  const detail = document.createElement('p');
+  detail.className = 'now-playing-artist';
+  detail.textContent = lastCompleted?.title
+    ? `Last played: ${lastCompleted.title}${lastCompleted.artist ? ` · ${lastCompleted.artist}` : ''}`
+    : 'Ready for another performance';
+  const next = document.createElement('p');
+  next.className = 'now-ended-detail';
+  next.textContent = 'Add another track above to keep the room going.';
+  copy.append(eyebrow, heading, detail, next);
+  card.append(artwork, copy);
+  now.append(card);
+}
+
 function renderQueue(queue, guild) {
   const container = $('#song-queue');
   const count = $('#queue-count');
@@ -516,6 +565,8 @@ async function refresh(guild, viewRequest = state.viewRequest) {
     renderQueue(data.status.queue, guild);
     if (data.status.current) {
       renderNowPlaying(data.status.current, data.status.paused, data.status.elapsed);
+    } else if (data.status.lastCompleted && data.botPresent) {
+      renderPlaybackEnded(data.status.lastCompleted);
     } else if (data.botPresent) {
       const now = $('#now');
       now.replaceChildren();
