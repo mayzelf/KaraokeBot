@@ -73,9 +73,14 @@ function renderGuilds() {
     const node = $('#guild-template').content.cloneNode(true);
     node.querySelector('.guild-name').textContent = guild.name;
     const icon = node.querySelector('.guild-icon');
+    const image = node.querySelector('.guild-image');
     if (guild.iconUrl) {
       icon.classList.add('has-image');
-      const image = node.querySelector('.guild-image');
+      image.onerror = () => {
+        icon.classList.remove('has-image');
+        image.removeAttribute('src');
+        image.alt = '';
+      };
       image.src = guild.iconUrl;
       image.alt = `${guild.name} icon`;
     }
@@ -161,6 +166,85 @@ function formatDuration(seconds) {
   if (!Number.isFinite(total) || total <= 0) return '';
   return `${Math.floor(total / 60)}:${String(Math.floor(total % 60)).padStart(2, '0')}`;
 }
+
+function renderNowPlaying(current, paused, elapsed = 0) {
+  const now = $('#now');
+  now.replaceChildren();
+  now.classList.remove('now-empty');
+  if (!current) return;
+
+  const title = current.title || 'Untitled track';
+  const rawDuration = Number(current.duration || 0);
+  const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+  const rawCurrentTime = Number(elapsed || 0);
+  const currentTime = Number.isFinite(rawCurrentTime) && rawCurrentTime > 0 ? rawCurrentTime : 0;
+  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+
+  const card = document.createElement('article');
+  card.className = `now-playing-card${paused ? ' is-paused' : ''}`;
+
+  const artwork = document.createElement('div');
+  artwork.className = 'now-playing-artwork';
+  const fallback = document.createElement('span');
+  fallback.className = 'now-playing-artwork-fallback';
+  fallback.setAttribute('aria-hidden', 'true');
+  fallback.textContent = '♪';
+  artwork.append(fallback);
+  if (current.thumbnail) {
+    const image = document.createElement('img');
+    image.src = current.thumbnail;
+    image.alt = `Cover art for ${title}`;
+    image.loading = 'lazy';
+    image.referrerPolicy = 'no-referrer';
+    image.onerror = () => image.remove();
+    artwork.append(image);
+  }
+
+  const copy = document.createElement('div');
+  copy.className = 'now-playing-copy';
+  const eyebrow = document.createElement('div');
+  eyebrow.className = 'now-playing-eyebrow';
+  const label = document.createElement('span');
+  label.textContent = paused ? 'Paused' : 'Now playing';
+  const live = document.createElement('span');
+  live.className = 'now-playing-state';
+  live.textContent = paused ? 'ON HOLD' : 'LIVE';
+  eyebrow.append(label, live);
+
+  const heading = document.createElement('h4');
+  heading.textContent = title;
+  const artist = document.createElement('p');
+  artist.className = 'now-playing-artist';
+  artist.textContent = current.artist || 'Unknown artist';
+  copy.append(eyebrow, heading, artist);
+
+  const progressTrack = document.createElement('div');
+  progressTrack.className = 'now-playing-progress';
+  progressTrack.setAttribute('role', 'progressbar');
+  progressTrack.setAttribute('aria-label', `Playback progress for ${title}`);
+  progressTrack.setAttribute('aria-valuemin', '0');
+  progressTrack.setAttribute('aria-valuemax', String(duration || 0));
+  progressTrack.setAttribute('aria-valuenow', String(Math.max(0, currentTime)));
+  const progressBar = document.createElement('span');
+  progressBar.style.width = `${progress}%`;
+  progressTrack.append(progressBar);
+
+  const time = document.createElement('div');
+  time.className = 'now-playing-time';
+  const elapsedLabel = document.createElement('span');
+  elapsedLabel.textContent = formatDuration(currentTime) || '0:00';
+  const durationLabel = document.createElement('span');
+  durationLabel.textContent = formatDuration(duration) || '--:--';
+  time.append(elapsedLabel, durationLabel);
+
+  const details = document.createElement('div');
+  details.className = 'now-playing-details';
+  details.append(progressTrack, time);
+  copy.append(details);
+  card.append(artwork, copy);
+  now.append(card);
+}
+
 function renderQueue(queue, guild) {
   const container = $('#song-queue');
   const count = $('#queue-count');
@@ -311,18 +395,17 @@ async function refresh(guild) {
     status.className = `status-pill${data.status.connected ? ' live' : ''}`;
     $('#resume').textContent = data.status.paused ? 'Resume' : 'Play';
     renderQueue(data.status.queue, guild);
-    const now = $('#now');
-    now.replaceChildren();
     if (data.status.current) {
-      const label = document.createElement('strong');
-      label.textContent = data.status.paused ? 'Paused' : 'Now playing';
-      now.append(label, document.createElement('br'));
-      now.append(document.createTextNode(data.status.current.title), document.createElement('br'));
-      if (data.status.current.artist) now.append(document.createTextNode(data.status.current.artist), document.createElement('br'));
-      now.append(document.createTextNode('Current room track'));
+      renderNowPlaying(data.status.current, data.status.paused, data.status.elapsed);
     } else if (data.botPresent) {
+      const now = $('#now');
+      now.replaceChildren();
+      now.classList.add('now-empty');
       now.textContent = 'Nothing is playing. Add a track above.';
     } else {
+      const now = $('#now');
+      now.replaceChildren();
+      now.classList.remove('now-empty');
       const card = document.createElement('div');
       card.className = 'invite-card';
       const copy = document.createElement('div');
