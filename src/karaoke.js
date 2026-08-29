@@ -63,7 +63,7 @@ class KaraokeManager {
       queue: [], connection: null, player: createAudioPlayer(), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
       startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
-      lastCompleted: null, nextPromise: null
+      lastCompleted: null, nextPromise: null, onPlaying: null
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
@@ -171,6 +171,12 @@ class KaraokeManager {
     await message.edit({ content: null, embeds: [embed], allowedMentions: noMentions }).catch(() => {});
   }
 
+  disposeStream(stream) {
+    if (!stream) return;
+    stream.destroyChildren?.();
+    if (!stream.destroyed) stream.destroy();
+  }
+
   async next(guildId, notice) {
     const session = this.session(guildId);
     // Stopping a stream can emit Idle while a replacement track is still
@@ -186,7 +192,16 @@ class KaraokeManager {
   async advance(guildId, notice) {
     const session = this.session(guildId);
     const previousTrack = session.current;
-    if (session.stream?.destroyChildren) session.stream.destroyChildren();
+    const previousStream = session.stream;
+    session.stream = null;
+    if (session.onPlaying) {
+      session.player.off(AudioPlayerStatus.Playing, session.onPlaying);
+      session.onPlaying = null;
+    }
+    // Stop the player before tearing down the producer. This prevents a late
+    // frame from the previous resource from being consumed during the handoff.
+    session.player.stop(true);
+    this.disposeStream(previousStream);
     if (session.lyricTimer) clearInterval(session.lyricTimer);
     session.lyricTimer = null;
     session.current = session.queue.shift() || null;
@@ -208,10 +223,12 @@ class KaraokeManager {
     const resource = createAudioResource(session.stream, { inputType: StreamType.Raw, inlineVolume: true });
     resource.volume?.setVolume(getGuild(guildId)?.default_volume ?? 0.8);
     const onPlaying = () => {
+      session.onPlaying = null;
       if (session.startedAt) return;
       session.startedAt = Date.now();
       this.startLyrics(guildId);
     };
+    session.onPlaying = onPlaying;
     session.player.once(AudioPlayerStatus.Playing, onPlaying);
     if (session.textChannel) {
       if (track.lyrics?.mode === 'plain') {
@@ -318,7 +335,14 @@ class KaraokeManager {
     const session = this.session(guildId);
     session.queue = [];
     session.player.stop(true);
-    if (session.stream?.destroyChildren) session.stream.destroyChildren();
+    if (session.onPlaying) {
+      session.player.off(AudioPlayerStatus.Playing, session.onPlaying);
+      session.onPlaying = null;
+    }
+    this.disposeStream(session.stream);
+    session.stream = null;
+    if (session.lyricTimer) clearInterval(session.lyricTimer);
+    session.lyricTimer = null;
     if (session.connection) session.connection.destroy();
     session.connection = null;
     session.voiceChannelId = null;
