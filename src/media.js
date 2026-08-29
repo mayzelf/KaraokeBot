@@ -3,6 +3,26 @@ const { safeYouTubeThumbnail, validateSongQuery } = require('./validation');
 // The base image includes Node 22. yt-dlp requires a JS runtime for YouTube's
 // challenge solving; enable Node explicitly instead of relying on detection.
 const YTDLP_RUNTIME_ARGS = ['--js-runtimes', 'node'];
+const YTDLP_EXTRACTOR_ARGS = [];
+if (process.env.YTDLP_PLAYER_CLIENT?.trim()) {
+  YTDLP_EXTRACTOR_ARGS.push('--extractor-args', `youtube:player_client=${process.env.YTDLP_PLAYER_CLIENT.trim()}`);
+}
+if (process.env.YTDLP_POT_PROVIDER_URL?.trim()) {
+  YTDLP_EXTRACTOR_ARGS.push(
+    '--extractor-args',
+    `youtubepot-bgutilhttp:base_url=${process.env.YTDLP_POT_PROVIDER_URL.trim()}`
+  );
+}
+// A hosted instance cannot use --cookies-from-browser because its browser
+// profile is not available inside the container. Mount a Netscape-format
+// cookie file and point YTDLP_COOKIES_FILE at it instead.
+const YTDLP_AUTH_ARGS = [];
+if (process.env.YTDLP_COOKIES_FILE?.trim()) {
+  YTDLP_AUTH_ARGS.push('--cookies', process.env.YTDLP_COOKIES_FILE.trim());
+}
+if (process.env.YTDLP_USER_AGENT?.trim()) {
+  YTDLP_AUTH_ARGS.push('--user-agent', process.env.YTDLP_USER_AGENT.trim());
+}
 
 function ytDlpError(stderr, code) {
   const detail = String(stderr || '').split(/\r?\n/).map((line) => line.trim()).find((line) => /^ERROR:/i.test(line));
@@ -14,7 +34,7 @@ function ytDlpError(stderr, code) {
 
 function runYtDlp(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk) => { stdout += chunk; });
@@ -67,7 +87,7 @@ async function resolveTrack(query) {
 }
 
 function createAudioStream(track) {
-  const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
     // Normalize different source videos to a consistent perceived loudness

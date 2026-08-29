@@ -1,4 +1,6 @@
 node_modules/
 data/
 .env
+secrets/
+youtube-cookies.txt
 npm-debug.log*

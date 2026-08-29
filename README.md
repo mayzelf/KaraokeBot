@@ -29,6 +29,16 @@ While a song is active, the bot's Discord activity shows the current artist and 
 
 The dashboard has the same controls. The selected server name remains visible in the workspace header. Search by name to choose one of the YouTube results before playing, or paste a YouTube URL directly. Its Play and Join buttons use the logged-in user's current Discord voice channel; the Join button also accepts a channel ID when the browser session cannot see the voice state. The active room cannot be taken over from another voice channel. The person who queued the current track can skip it, and other people can skip it after that requester leaves the room. Upcoming tracks can be moved up or down, removed individually, or cleared without stopping the current song.
 
+### Account-free YouTube authentication
+
+The Docker Compose setup includes the `bgutil-ytdlp-pot-provider` as an internal sidecar. It generates Proof-of-Origin tokens for yt-dlp and does not require a Google account or Google cookies. The bot is configured to use the `mweb` YouTube client and contact the provider over Docker's private network. Rebuild with:
+
+```sh
+docker compose up -d --build
+```
+
+The provider is third-party software and its token does not guarantee that YouTube will accept every request. If it does not solve the server IP's bot check, use the cookie-file setup below or route extraction through a trusted residential network. See the [yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/Po-Token-Guide) and [provider documentation](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) for current compatibility details.
+
 ## Configuration
 
 Server settings are stored in the persistent `karaoke-data` Docker volume and are editable from the dashboard:
@@ -43,6 +53,28 @@ The channel and role allow-lists accept comma-separated Discord IDs.
 Blank allow-lists mean “all”. Users with **Manage Server** can always control karaoke. The dashboard only lists servers where the logged-in Discord account is the server owner or has **Manage Server**/**Administrator** permission, which is what Discord requires to install a bot.
 
 For a public deployment, set `PUBLIC_URL` to the HTTPS URL users will open and add `${PUBLIC_URL}/auth/callback` to the Discord OAuth2 redirect URLs. Put the dashboard behind HTTPS; the application marks the session cookie secure automatically when `PUBLIC_URL` starts with `https://`. Dashboard sessions are stored in the persistent Docker volume, so a routine container restart does not require logging in again.
+
+### YouTube authentication on a hosted server
+
+If YouTube reports `Sign in to confirm you're not a bot`, the server's IP has likely been challenged. A hosted container cannot use your local browser profile, so export a fresh YouTube cookies file in Mozilla/Netscape format and copy it to the server. Keep this file private: it grants access to the browser session and must not be committed.
+
+Set this in the server's `.env`:
+
+```dotenv
+YTDLP_COOKIES_FILE=/run/secrets/youtube-cookies.txt
+# Optional, but use the User-Agent from the browser that exported the file.
+YTDLP_USER_AGENT=Mozilla/5.0 ...
+```
+
+Then add this read-only bind mount under the `karaoke` service in `docker-compose.yml` (adjust the host path if needed):
+
+```yaml
+    volumes:
+      - karaoke-data:/app/data
+      - ./youtube-cookies.txt:/run/secrets/youtube-cookies.txt:ro
+```
+
+Rebuild the container with `docker compose up -d --build`. Cookies expire or are invalidated, so they may need to be refreshed. If cookies exported on your personal computer are rejected from the server, export them from a browser using the server's public IP, or route the bot through the same network/proxy; yt-dlp notes that some services require the same IP, cookies, and User-Agent for extraction and playback. See the [yt-dlp cookie FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp) for export details.
 
 ## Security safeguards
 

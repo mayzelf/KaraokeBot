@@ -5,7 +5,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg python3 python3-pip ca-certificates \
-    && pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]" \
+    && pip3 install --no-cache-dir --break-system-packages "yt-dlp[default]" "bgutil-ytdlp-pot-provider==1.3.2" \
     && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp's default extras include the EJS challenge-solver scripts. Node 22
