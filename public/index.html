@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Karaoke Control Room</title><link rel="stylesheet" href="/styles.css"></head>
+<body>
+  <main class="shell">
+    <header class="topbar"><div class="brand"><span class="brand-mark">♪</span><span>Karaoke Control Room</span></div><div id="account"></div></header>
+    <section id="logged-out" class="hero"><div class="hero-copy"><p class="eyebrow">SELF-HOSTED DISCORD KARAOKE</p><h1>Make every voice<br><em>the main event.</em></h1><p class="lede">Play music in Discord, show the exact lyric line in real time, and manage every server from one calm, simple dashboard.</p><a class="button primary" href="/auth/login">Log in with Discord <span>→</span></a></div><div class="hero-card"><div class="equalizer"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="hero-quote">“The next line is<br><strong>yours.</strong>”</div><div class="mini-line">♪ &nbsp; synchronized lyrics</div></div></section>
+    <section id="app" class="hidden"><div class="app-heading"><div><p class="eyebrow">CONTROL ROOM</p><h2>Your servers</h2></div><p class="muted">Choose a server to manage playback and access.</p></div><div id="guilds" class="guild-grid"></div><div id="workspace" class="hidden"></div></section>
+  </main>
+  <template id="guild-template"><button class="guild-card"><span class="guild-icon"></span><span class="guild-info"><strong class="guild-name"></strong><small class="guild-status"></small></span><span class="arrow">→</span></button></template>
+  <script src="/app.js"></script>
+</body></html>
