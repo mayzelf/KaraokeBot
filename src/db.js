@@ -6,6 +6,7 @@ const config = require('./config');
 fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
 const db = new Database(config.databasePath);
 db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS guild_settings (
     guild_id TEXT PRIMARY KEY,
@@ -27,6 +28,25 @@ db.exec(`
     sess TEXT NOT NULL,
     expires_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS library_files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sha256 TEXT NOT NULL UNIQUE,
+    storage_name TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    artist TEXT NOT NULL DEFAULT '',
+    duration_seconds REAL NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    uploaded_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS guild_library (
+    guild_id TEXT NOT NULL,
+    file_id INTEGER NOT NULL REFERENCES library_files(id) ON DELETE CASCADE,
+    added_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (guild_id, file_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_guild_library_guild ON guild_library(guild_id);
 `);
 
 function parseJson(value, fallback = []) {

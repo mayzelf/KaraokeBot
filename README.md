@@ -29,6 +29,8 @@ While a song is active, the bot's Discord activity shows the current artist and 
 
 The dashboard has the same controls. The selected server name remains visible in the workspace header. Search by name to choose one of the YouTube results before playing, or paste a YouTube URL directly. Its Play and Join buttons use the logged-in user's current Discord voice channel; the Join button also accepts a channel ID when the browser session cannot see the voice state. The active room cannot be taken over from another voice channel. The person who queued the current track can skip it, and other people can skip it after that requester leaves the room. Upcoming tracks can be moved up or down, removed individually, or cleared without stopping the current song.
 
+When a YouTube source is unavailable, the dashboard also has a server audio library. Upload an audio-only file from the library panel; FFmpeg checks the actual streams, rejects video and files longer than five minutes, then converts accepted uploads to 128 kbps Opus and removes the original upload. Files are deduplicated by hash and stored in the persistent Docker volume. The default limits are 20 GB total, 5 GB per server, 1 GB per uploader per server, and 50 MB per upload. They can be changed with `LIBRARY_MAX_GB`, `LIBRARY_MAX_GUILD_GB`, `LIBRARY_MAX_USER_GB`, `LIBRARY_MAX_UPLOAD_MB`, and `LIBRARY_MAX_MINUTES`. Only users who can access the existing dashboard server controls (the owner or someone with Manage Server) can upload, play, or remove library tracks. Upload only material you have permission to use.
+
 ### Account-free YouTube authentication
 
 The Docker Compose setup includes the `bgutil-ytdlp-pot-provider` as an internal sidecar. It generates Proof-of-Origin tokens for yt-dlp and does not require a Google account or Google cookies. The bot is configured to use the `mweb` YouTube client and contact the provider over Docker's private network. Rebuild with:
@@ -87,7 +89,7 @@ This project is released under the MIT License; see [LICENSE](LICENSE).
 The application is built with and gives credit to these direct dependencies:
 
 - [discord.js](https://github.com/discordjs/discord.js) and [@discordjs/voice](https://github.com/discordjs/voice) — Apache License 2.0.
-- [Express](https://github.com/expressjs/express), [express-session](https://github.com/expressjs/session), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [Helmet](https://github.com/helmetjs/helmet), and [opusscript](https://github.com/abalabahaha/opusscript) — MIT License.
+- [Express](https://github.com/expressjs/express), [express-session](https://github.com/expressjs/session), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [Helmet](https://github.com/helmetjs/helmet), [Busboy](https://github.com/mscdex/busboy), and [opusscript](https://github.com/abalabahaha/opusscript) — MIT License.
 - [dotenv](https://github.com/motdotla/dotenv) — BSD 2-Clause License.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [FFmpeg](https://ffmpeg.org/) — external runtime tools included by the Docker image under their respective upstream terms.
 - [LRCLIB](https://lrclib.net/) — the external lyrics service used for timed and unsynchronized lyric lookups. Lyrics remain subject to the rights and terms of their respective owners.

@@ -79,7 +79,7 @@ class KaraokeManager {
 
   async add(guild, query, voiceChannel, textChannel, requesterId = null) {
     const session = await this.join(guild, voiceChannel, textChannel, requesterId);
-    const track = await resolveTrack(query);
+    const track = query && typeof query === 'object' && query.source === 'library' ? query : await resolveTrack(query);
     track.requestedBy = requesterId;
     session.queue.push(track);
     if (!session.current) await this.next(guild.id);
@@ -114,8 +114,8 @@ class KaraokeManager {
         .setColor(0xf59e0b)
         .setTitle(index === 0 ? '🎤 Now singing · Full lyrics' : '🎤 Full lyrics · Continued')
         .setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}\n\n${chunks[index]}`)
-        .setFooter({ text: 'Complete lyrics · not synchronized' })
-        .setURL(track.url);
+        .setFooter({ text: 'Complete lyrics · not synchronized' });
+      if (track.url) embed.setURL(track.url);
       if (index === 0 && track.thumbnail) embed.setThumbnail(track.thumbnail);
       if (index === 0 && notice) embed.setFooter({ text: `${notice} · Complete lyrics · not synchronized` });
       const message = await session.textChannel.send({ embeds: [embed], allowedMentions: noMentions }).catch(() => null);
@@ -159,7 +159,8 @@ class KaraokeManager {
         const firstLine = track.lyrics?.lines?.[0]?.text;
         const nextLine = track.lyrics?.lines?.[1]?.text;
         const lyricPreview = firstLine ? `\n\n## ${firstLine}${nextLine ? `\n\n${nextLine}` : ''}` : '\n\nLoading synchronized lyrics…';
-        const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎤 Now singing').setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}${lyricPreview}`).setURL(track.url);
+        const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle('🎤 Now singing').setDescription(`**${track.title}**${track.artist ? `\n${track.artist}` : ''}${lyricPreview}`);
+        if (track.url) embed.setURL(track.url);
         if (track.thumbnail) embed.setThumbnail(track.thumbnail);
         if (notice) embed.setFooter({ text: notice });
         else if (firstLine) embed.setFooter({ text: 'Synchronized lyrics · starting playback' });
@@ -167,7 +168,9 @@ class KaraokeManager {
       }
     }
     if (!track.lyrics && session.lyricMessage) {
-      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [new EmbedBuilder().setColor(0xf59e0b).setTitle('Lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no lyrics were found for this track.`).setURL(track.url)], allowedMentions: noMentions }).catch(() => {});
+      const unavailableEmbed = new EmbedBuilder().setColor(0xf59e0b).setTitle('Lyrics unavailable').setDescription(`**${track.title}**\n\nThe song is playing, but no lyrics were found for this track.`);
+      if (track.url) unavailableEmbed.setURL(track.url);
+      await session.lyricMessage.edit({ content: '🎤 Now singing', embeds: [unavailableEmbed], allowedMentions: noMentions }).catch(() => {});
     }
     // Register the listener and post the initial message before starting audio,
     // otherwise a fast player can emit Playing before lyrics are ready to update.

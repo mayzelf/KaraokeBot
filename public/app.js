@@ -27,7 +27,9 @@ const api = async (url, options) => {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      const response = await fetch(url, { headers: { 'content-type': 'application/json' }, ...options });
+      const request = { ...options };
+      request.headers = { ...(options?.body instanceof FormData ? {} : { 'content-type': 'application/json' }), ...(options?.headers || {}) };
+      const response = await fetch(url, request);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || 'Request failed');
       return data;
@@ -108,6 +110,11 @@ async function selectGuild(guild) {
         <div id="now" class="queue"></div>
       </div>
     </div>
+    <div class="panel library-panel"><div class="panel-head"><div><div class="panel-kicker">YOUR STAGE LIBRARY</div><h3>Upload a song</h3></div><span class="panel-symbol">♫</span></div>
+      <p class="settings-intro library-intro">Add audio you are allowed to use when YouTube is unavailable. Uploads are converted to compact audio and shared with this server.</p>
+      <form id="library-upload" class="library-upload"><div class="library-upload-fields"><div><label for="library-file">Audio file</label><input class="input" id="library-file" type="file" accept="audio/*,.mp3,.m4a,.ogg,.opus,.wav,.flac,.aac,.webm" required></div><div><label for="library-title">Title <span class="optional">optional</span></label><input class="input" id="library-title" maxlength="200" placeholder="Use the file metadata or name"></div><div><label for="library-artist">Artist <span class="optional">optional</span></label><input class="input" id="library-artist" maxlength="120" placeholder="Artist or performer"></div></div><div class="library-upload-actions"><button class="control control-accent" id="library-upload-button" type="submit">Upload audio <span>↗</span></button><span id="library-notice" class="notice"></span></div><p class="field-note">Audio only · maximum 5 minutes · maximum 50 MB before conversion. Please upload only material you have permission to use.</p></form>
+      <div class="queue-heading library-heading"><div><span>AVAILABLE SONGS</span><span id="library-count">0 tracks</span></div></div><div id="library-list" class="library-list"></div>
+    </div>
     <div class="panel settings-panel"><div class="panel-head"><div><div class="panel-kicker">SERVER PREFERENCES</div><h3>Make it yours</h3></div><span class="panel-symbol">✦</span></div>
       <p class="settings-intro">Limit who can use karaoke and where commands can be sent. Leave a field blank to keep it open.</p>
       <div class="settings-grid"><div><label for="voice-entry">Allowed voice channel IDs</label><div class="tag-input" id="voice-tags"><div class="tag-list" id="voice-tag-list"></div><input class="tag-entry" id="voice-entry" placeholder="Type an ID, then press comma or Enter"></div><p class="field-note">Press comma or Enter after each ID. Copy IDs with Discord Developer Mode.</p></div><div><label for="text-entry">Allowed command text channel IDs</label><div class="tag-input" id="text-tags"><div class="tag-list" id="text-tag-list"></div><input class="tag-entry" id="text-entry" placeholder="Type an ID, then press comma or Enter"></div></div><div><label for="roles-entry">Allowed role IDs</label><div class="tag-input" id="roles-tags"><div class="tag-list" id="roles-tag-list"></div><input class="tag-entry" id="roles-entry" placeholder="Type an ID, then press comma or Enter"></div></div><div><label for="volume">Default volume</label><div class="range-row"><input class="input" id="volume" type="range" min="0" max="1" step="0.05"><span class="range-value" id="volume-value">80%</span></div></div></div>
@@ -119,6 +126,7 @@ async function selectGuild(guild) {
   fillSettings(settings);
   await loadChannels(guild);
   bindControls(guild);
+  await loadLibrary(guild);
   refresh(guild);
   state.timer = setInterval(() => refresh(guild), 3000);
 }
@@ -165,6 +173,85 @@ function formatDuration(seconds) {
   const total = Number(seconds || 0);
   if (!Number.isFinite(total) || total <= 0) return '';
   return `${Math.floor(total / 60)}:${String(Math.floor(total % 60)).padStart(2, '0')}`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+  return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function renderLibrary(tracks, guild) {
+  const container = $('#library-list');
+  const count = $('#library-count');
+  const songs = Array.isArray(tracks) ? tracks : [];
+  count.textContent = `${songs.length} ${songs.length === 1 ? 'track' : 'tracks'}`;
+  container.replaceChildren();
+  if (!songs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'queue-empty';
+    empty.textContent = 'No uploaded songs yet. Add audio here when a YouTube source is not reliable.';
+    container.append(empty);
+    return;
+  }
+  songs.forEach((track) => {
+    const card = document.createElement('div');
+    card.className = 'library-card';
+    const copy = document.createElement('div');
+    copy.className = 'queue-copy';
+    const title = document.createElement('strong');
+    title.textContent = track.title || 'Untitled track';
+    const meta = document.createElement('small');
+    meta.textContent = [track.artist, formatDuration(track.duration), formatBytes(track.sizeBytes)].filter(Boolean).join(' · ');
+    copy.append(title, meta);
+    const actions = document.createElement('div');
+    actions.className = 'library-actions';
+    const play = document.createElement('button');
+    play.type = 'button'; play.className = 'control control-accent library-play'; play.textContent = 'Play';
+    play.onclick = async () => {
+      play.disabled = true;
+      try { await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ libraryId: track.id }) }); await refresh(guild); }
+      catch (error) { $('#notice').textContent = error.message; }
+      finally { play.disabled = false; }
+    };
+    const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'queue-remove'; remove.textContent = '×'; remove.title = 'Remove from library';
+    remove.onclick = async () => {
+      if (!window.confirm(`Remove “${track.title || 'this track'}” from the server library?`)) return;
+      remove.disabled = true;
+      try { await api(`/api/guilds/${encodeURIComponent(guild.id)}/library/${encodeURIComponent(track.id)}`, { method: 'DELETE' }); await loadLibrary(guild); }
+      catch (error) { $('#library-notice').textContent = error.message; remove.disabled = false; }
+    };
+    actions.append(play, remove);
+    card.append(copy, actions);
+    container.append(card);
+  });
+}
+
+async function loadLibrary(guild) {
+  try { const data = await api(`/api/guilds/${encodeURIComponent(guild.id)}/library`); renderLibrary(data.tracks, guild); }
+  catch (error) { const notice = $('#library-notice'); if (notice) notice.textContent = error.message; }
+}
+
+function bindLibrary(guild) {
+  $('#library-upload').onsubmit = async (event) => {
+    event.preventDefault();
+    const file = $('#library-file').files[0];
+    if (!file) return;
+    const button = $('#library-upload-button');
+    const notice = $('#library-notice');
+    const form = new FormData();
+    form.append('file', file);
+    form.append('title', $('#library-title').value);
+    form.append('artist', $('#library-artist').value);
+    button.disabled = true;
+    notice.textContent = 'Uploading and converting…';
+    try { await api(`/api/guilds/${encodeURIComponent(guild.id)}/library`, { method: 'POST', body: form }); event.target.reset(); notice.textContent = 'Added to the library.'; await loadLibrary(guild); }
+    catch (error) { notice.textContent = error.message; }
+    finally { button.disabled = false; }
+  };
 }
 
 function renderNowPlaying(current, paused, elapsed = 0) {
@@ -381,6 +468,7 @@ function bindControls(guild) {
   $('#resume').onclick = () => action('resume'); $('#pause').onclick = () => action('pause'); $('#skip').onclick = () => action('skip'); $('#stop').onclick = () => action('stop');
   $('#clear-queue').onclick = () => action('queue/clear');
   bindSearch();
+  bindLibrary(guild);
   $('#volume').oninput = () => { $('#volume-value').textContent = `${Math.round(Number($('#volume').value) * 100)}%`; };
   bindTagInput('voice'); bindTagInput('text'); bindTagInput('roles');
   $('#save').onclick = async () => { try { ['voice', 'text', 'roles'].forEach((type) => { const input = $(`#${tagIds[type]}-entry`); if (input.value.trim()) { addTags(type, input.value); input.value = ''; } }); const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`, { method: 'PUT', body: JSON.stringify({ allowedVoiceChannels: tagState.voice, allowedTextChannels: tagState.text, allowedRoles: tagState.roles, defaultVolume: $('#volume').value }) }); fillSettings(settings); $('#settings-notice').textContent = 'Saved.'; } catch (error) { $('#settings-notice').textContent = error.message; } };

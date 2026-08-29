@@ -1,10 +1,15 @@
 const path = require('node:path');
+const fs = require('node:fs');
+const fsp = fs.promises;
+const os = require('node:os');
+const Busboy = require('busboy');
 const express = require('express');
 const session = require('express-session');
 const helmet = require('helmet');
 const config = require('./config');
 const { client, karaoke, inviteUrl } = require('./bot');
 const { searchTracks } = require('./media');
+const { listForGuild, removeFromGuild, saveUpload, trackForGuild } = require('./library');
 const { ensureGuild, getGuild, updateGuild, saveUser } = require('./db');
 const { SQLiteStore } = require('./session-store');
 const { createOAuthState, validOAuthState } = require('./oauth');
@@ -121,6 +126,80 @@ app.put('/api/guilds/:guildId/settings', requireLogin, requireGuild, (req, res) 
   } catch (error) { res.status(400).json({ error: error.message }); }
 });
 
+async function parseAudioUpload(req) {
+  const contentType = String(req.headers['content-type'] || '');
+  if (!/^multipart\/form-data\s*;/i.test(contentType)) throw new Error('Upload the audio as a multipart form.');
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'karaoke-upload-'));
+  return new Promise((resolve, reject) => {
+    const tempPath = path.join(tempDir, 'upload.bin');
+    let fileSeen = false;
+    let filename = '';
+    let fileTooLarge = false;
+    let fields = {};
+    let filePromise = Promise.resolve();
+    let settled = false;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      if (error) fsp.rm(tempDir, { recursive: true, force: true }).finally(() => reject(error));
+      else resolve(value);
+    };
+    let parser;
+    try {
+      parser = Busboy({ headers: req.headers, limits: { files: 1, fileSize: config.libraryMaxUploadBytes, fields: 4, fieldSize: 2048 } });
+    } catch (error) {
+      finish(error);
+      return;
+    }
+    parser.on('field', (name, value) => { if (name === 'title' || name === 'artist') fields[name] = value; });
+    parser.on('file', (name, file, info) => {
+      if (name !== 'file' || fileSeen) {
+        file.resume();
+        return finish(new Error('Send exactly one audio file in the `file` field.'));
+      }
+      fileSeen = true;
+      filename = String(info?.filename || '').slice(0, 255);
+      const output = fs.createWriteStream(tempPath, { flags: 'wx' });
+      filePromise = new Promise((resolveFile, rejectFile) => {
+        file.on('limit', () => { fileTooLarge = true; output.destroy(new Error(`Upload is limited to ${Math.floor(config.libraryMaxUploadBytes / 1024 / 1024)} MB.`)); });
+        file.on('error', rejectFile);
+        output.on('error', rejectFile);
+        output.on('finish', resolveFile);
+      });
+      file.pipe(output);
+    });
+    parser.on('filesLimit', () => finish(new Error('Send exactly one audio file.')));
+    parser.on('error', (error) => finish(error));
+    parser.on('finish', async () => {
+      try {
+        await filePromise;
+        if (fileTooLarge) throw new Error(`Upload is limited to ${Math.floor(config.libraryMaxUploadBytes / 1024 / 1024)} MB.`);
+        if (!fileSeen) throw new Error('Choose an audio file to upload.');
+        finish(null, { tempDir, tempPath, fields, filename });
+      } catch (error) { finish(error); }
+    });
+    req.on('aborted', () => finish(new Error('The upload was interrupted.')));
+    req.pipe(parser);
+  });
+}
+
+app.get('/api/guilds/:guildId/library', requireLogin, requireGuild, (req, res) => {
+  res.json({ tracks: listForGuild(req.params.guildId) });
+});
+app.post('/api/guilds/:guildId/library', requireLogin, requireGuild, async (req, res) => {
+  let upload;
+  try {
+    upload = await parseAudioUpload(req);
+    const track = await saveUpload({ sourcePath: upload.tempPath, guildId: req.params.guildId, userId: req.session.user.id, title: upload.fields.title, artist: upload.fields.artist, filename: upload.filename });
+    res.status(201).json(track);
+  } catch (error) { res.status(400).json({ error: error.message }); }
+  finally { if (upload?.tempDir) await fsp.rm(upload.tempDir, { recursive: true, force: true }).catch(() => {}); }
+});
+app.delete('/api/guilds/:guildId/library/:fileId', requireLogin, requireGuild, async (req, res) => {
+  try { res.json(await removeFromGuild(req.params.guildId, req.params.fileId)); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
+
 async function requesterVoiceMember(guild, userId) {
   const member = await guild.members.fetch(userId).catch(() => null);
   return member?.voice?.channel || null;
@@ -134,7 +213,8 @@ function control(method) {
       const guild = client.guilds.cache.get(id);
       if (method === 'play') {
         const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel;
-        const track = await karaoke.add(guild, validateSongQuery(body.song), voice, voice || defaultTextChannel(guild), req.session.user.id);
+        const query = body.libraryId !== undefined ? trackForGuild(id, body.libraryId) : validateSongQuery(body.song);
+        const track = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id);
         return res.json(track);
       }
       if (method === 'join') {

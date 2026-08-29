@@ -87,6 +87,7 @@ async function resolveTrack(query) {
 }
 
 function createAudioStream(track) {
+  if (track.source === 'library' && track.path) return createLibraryAudioStream(track.path);
   const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
@@ -114,6 +115,21 @@ function createAudioStream(track) {
     if (!ffmpeg.killed) ffmpeg.kill('SIGKILL');
   };
   ytdlp.on('error', (error) => stream.destroy(error));
+  ffmpeg.on('error', (error) => stream.destroy(error));
+  return stream;
+}
+
+function createLibraryAudioStream(filePath) {
+  const ffmpeg = spawn('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-i', filePath,
+    '-vn', '-map', '0:a:0',
+    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+    '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const stream = ffmpeg.stdout;
+  ffmpeg.stderr.on('data', (chunk) => console.warn('[ffmpeg]', chunk.toString().trim()));
+  stream.ffmpeg = ffmpeg;
+  stream.destroyChildren = () => { if (!ffmpeg.killed) ffmpeg.kill('SIGKILL'); };
   ffmpeg.on('error', (error) => stream.destroy(error));
   return stream;
 }
