@@ -108,6 +108,16 @@ async function searchSoundCloud(cleanQuery) {
   return (Array.isArray(data.entries) ? data.entries : []).map(previewSoundCloud).filter(Boolean);
 }
 
+function isPlaylistUrl(value) {
+  try {
+    const url = new URL(value);
+    if (isYouTubeUrl(value)) return url.searchParams.has('list');
+    return isSoundCloudUrl(value) && /\/sets(?:\/|$)/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 async function pipedRequest(endpoint, params = {}, isUsable = () => true) {
   if (!config.pipedApiUrls.length) throw new Error('Piped is not configured.');
   let lastError;
@@ -211,6 +221,15 @@ async function resolveWithYtDlp(target, fallback, source) {
   };
 }
 
+async function resolvePlaylist(query) {
+  const output = await runYtDlp(['--flat-playlist', '--dump-single-json', '--no-warnings', query]);
+  const data = parseJson(output, 'The playlist provider returned an invalid response.');
+  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const tracks = entries.map((entry) => isSoundCloudUrl(query) ? previewSoundCloud(entry) : previewYouTube(entry)).filter(Boolean);
+  if (!tracks.length) throw new Error('That playlist is empty or contains no playable tracks.');
+  return tracks;
+}
+
 async function resolveTrack(query) {
   const cleanQuery = validateSongQuery(query);
   if (isSoundCloudUrl(cleanQuery)) return resolveWithYtDlp(cleanQuery, cleanQuery, 'soundcloud');
@@ -235,6 +254,12 @@ async function resolveTrack(query) {
     }
     throw new Error(`No playable result was found. YouTube: ${youtubeError.message} SoundCloud: ${soundCloudError.message}`);
   }
+}
+
+async function resolveTracks(query) {
+  const cleanQuery = validateSongQuery(query);
+  if (isPlaylistUrl(cleanQuery)) return resolvePlaylist(cleanQuery);
+  return [await resolveTrack(cleanQuery)];
 }
 
 function createAudioStream(track) {
@@ -301,4 +326,4 @@ function createLibraryAudioStream(filePath) {
   return stream;
 }
 
-module.exports = { createAudioStream, resolveTrack, searchTracks };
+module.exports = { createAudioStream, isPlaylistUrl, resolveTrack, resolveTracks, searchTracks };

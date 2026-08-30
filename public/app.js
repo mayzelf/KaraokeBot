@@ -100,8 +100,8 @@ async function selectGuild(guild) {
   workspace.classList.remove('hidden');
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
-      <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE A TRACK</div><h3>Play a song</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a YouTube URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+      <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE TRACKS</div><h3>Play a song or playlist</h3></div><span class="panel-symbol">⌁</span></div>
+        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video or playlist URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat.</p><div id="notice" class="notice"></div>
         <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue"></div>
       </div>
@@ -500,7 +500,7 @@ function updateSearchProvider() {
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  $('#song').placeholder = isSoundCloud ? 'Search SoundCloud or paste a SoundCloud URL' : 'Search YouTube or paste a YouTube URL';
+  $('#song').placeholder = isSoundCloud ? 'Search SoundCloud or paste a track or playlist URL' : 'Search YouTube or paste a video or playlist URL';
 }
 function updatePlayButton() {
   const value = $('#song').value.trim();

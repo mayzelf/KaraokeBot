@@ -215,8 +215,8 @@ function control(method) {
       if (method === 'play') {
         const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel;
         const query = body.libraryId !== undefined ? trackForGuild(id, body.libraryId) : validateSongQuery(body.song);
-        const track = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id);
-        return res.json(track);
+        const tracks = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id);
+        return res.json({ tracks, count: tracks.length });
       }
       if (method === 'join') {
         const channelId = validateOptionalDiscordId(body.channelId);

@@ -4,7 +4,7 @@ const {
 } = require('@discordjs/voice');
 const { ActivityType, EmbedBuilder } = require('discord.js');
 const { ensureGuild, getGuild } = require('./db');
-const { resolveTrack, createAudioStream } = require('./media');
+const { resolveTracks, createAudioStream } = require('./media');
 const { findLyrics, currentLine } = require('./lyrics');
 const noMentions = { parse: [] };
 const presenceRefreshMs = 15_000;
@@ -115,11 +115,11 @@ class KaraokeManager {
 
   async add(guild, query, voiceChannel, textChannel, requesterId = null) {
     const session = await this.join(guild, voiceChannel, textChannel, requesterId);
-    const track = query && typeof query === 'object' && query.source === 'library' ? query : await resolveTrack(query);
-    track.requestedBy = requesterId;
-    session.queue.push(track);
+    const tracks = query && typeof query === 'object' && query.source === 'library' ? [query] : await resolveTracks(query);
+    tracks.forEach((track) => { track.requestedBy = requesterId; });
+    session.queue.push(...tracks);
     if (!session.current) await this.next(guild.id);
-    return track;
+    return tracks;
   }
 
   elapsed(session) {

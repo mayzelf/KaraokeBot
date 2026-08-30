@@ -8,7 +8,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const karaoke = new KaraokeManager(client);
 const noMentions = { parse: [] };
 const commands = [
-  new SlashCommandBuilder().setName('play').setDescription('Play a song and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('Song search, YouTube URL, or SoundCloud URL').setMaxLength(300).setRequired(true)),
+  new SlashCommandBuilder().setName('play').setDescription('Play a song or playlist and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('Song search, video URL, or playlist URL').setMaxLength(300).setRequired(true)),
   new SlashCommandBuilder().setName('join').setDescription('Join your current voice channel'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop karaoke and leave the voice channel'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
@@ -42,9 +42,13 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'play') {
       await interaction.deferReply();
       const voice = voiceChannel(interaction);
-      const track = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice, interaction.user.id);
-      const lyricsMessage = track.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : track.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.';
-      return interaction.editReply({ content: `Added **${track.title}** to the queue. ${lyricsMessage}`, allowedMentions: noMentions });
+      const tracks = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice, interaction.user.id);
+      const firstTrack = tracks[0];
+      const lyricsMessage = tracks.length === 1
+        ? (firstTrack.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : firstTrack.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.')
+        : 'The playlist tracks were added in order.';
+      const summary = tracks.length === 1 ? `Added **${firstTrack.title}** to the queue.` : `Added **${tracks.length} tracks** to the queue.`;
+      return interaction.editReply({ content: `${summary} ${lyricsMessage}`, allowedMentions: noMentions });
     }
     if (command === 'join') {
       const voice = voiceChannel(interaction);
