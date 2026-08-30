@@ -3,8 +3,34 @@ const path = require('node:path');
 const Database = require('better-sqlite3');
 const config = require('./config');
 
+// Opening a read-only database and reading from it both succeed, so a
+// permissions problem surfaces only at the first write - as a bare
+// SQLITE_READONLY several frames deep. Turn it into something an operator can
+// act on, wherever it happens to surface.
+function unwritableDatabase(error) {
+  if (error.code !== 'SQLITE_READONLY' && error.code !== 'SQLITE_CANTOPEN') return error;
+  const identity = typeof process.getuid === 'function' ? `uid ${process.getuid()}:${process.getgid()}` : 'the current user';
+  return new Error([
+    `The database at ${config.databasePath} is not writable by ${identity}.`,
+    '',
+    'In Docker this usually means the data volume is still owned by root from a release',
+    'that ran the container as root. Fix the ownership once:',
+    '',
+    '  docker compose down',
+    '  docker volume ls | grep karaoke',
+    '  docker run --rm -v <project>_karaoke-data:/data node:22-bookworm-slim chown -R node:node /data',
+    '  docker compose up -d',
+    ''
+  ].join('\n'));
+}
+
+function openDatabase() {
+  try { return new Database(config.databasePath); }
+  catch (error) { throw unwritableDatabase(error); }
+}
+
 fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
-const db = new Database(config.databasePath);
+const db = openDatabase();
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.exec(`
@@ -55,7 +81,12 @@ function addColumn(table, column, definition) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
   if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-addColumn('guild_settings', 'instrumental', 'INTEGER NOT NULL DEFAULT 0');
+
+try {
+  addColumn('guild_settings', 'instrumental', 'INTEGER NOT NULL DEFAULT 0');
+} catch (error) {
+  throw unwritableDatabase(error);
+}
 
 function parseJson(value, fallback = []) {
   try { return JSON.parse(value); } catch { return fallback; }

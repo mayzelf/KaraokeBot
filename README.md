@@ -43,6 +43,19 @@ docker compose up -d --build
 
 The provider is third-party software and its token does not guarantee that YouTube will accept every request. If it does not solve the server IP's bot check, use the cookie-file setup below or route extraction through a trusted residential network. See the [yt-dlp PO Token guide](https://github.com/yt-dlp/yt-dlp/wiki/Po-Token-Guide) and [provider documentation](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) for current compatibility details.
 
+## Upgrading an existing deployment
+
+The container now runs as the unprivileged `node` user instead of root. Docker applies the image's ownership only to a **new** volume, so a `karaoke-data` volume created by an earlier release still belongs to root, and the bot exits at startup with `SQLITE_READONLY`. Fix the ownership once:
+
+```bash
+docker compose down
+docker volume ls | grep karaoke
+docker run --rm -v <project>_karaoke-data:/data node:22-bookworm-slim chown -R node:node /data
+docker compose up -d
+```
+
+Take the volume name from the `docker volume ls` output; Compose prefixes it with the project directory name. Fresh installations are unaffected.
+
 ## Instrumental mode
 
 `/instrumental` (or the button in the playback panel) subtracts the two stereo channels from each other. Most mixes place the lead vocal dead centre, so this cancels much of it.
