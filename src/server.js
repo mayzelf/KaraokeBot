@@ -45,7 +45,85 @@ function rateLimit(windowMs, max) {
 }
 const authLimiter = rateLimit(10 * 60 * 1000, 20);
 const apiLimiter = rateLimit(60 * 1000, 120);
+// Search and upload each start an external process, so they get a tighter
+// budget than the read-only polling endpoints.
+const searchLimiter = rateLimit(60 * 1000, 20);
+const uploadLimiter = rateLimit(10 * 60 * 1000, 10);
 app.use('/api', apiLimiter);
+
+// The session cookie is SameSite=Lax, which already keeps browsers from
+// attaching it to cross-site writes. Checking the origin as well means a single
+// future change to the cookie policy cannot silently open up CSRF.
+const dashboardOrigin = new URL(config.publicUrl).origin;
+app.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const header = req.get('origin') || req.get('referer') || '';
+  let origin = null;
+  try { origin = header ? new URL(header).origin : null; } catch { origin = null; }
+  if (origin !== dashboardOrigin) return res.status(403).json({ error: 'This request did not come from the dashboard.' });
+  next();
+});
+
+// Never hand an internal error message, path, or stack to a client.
+function safeMessage(error, fallback = 'That request could not be completed.') {
+  const message = String(error?.message || '');
+  if (!message || message.length > 200) return fallback;
+  // A backslash only ever reaches here from a Windows path or a stack frame;
+  // none of the curated messages contain one.
+  const looksInternal = message.includes(String.fromCharCode(92))
+    || /(?:^|[\s"'(])\/(?:home|app|usr|etc|root|run|var|proc|tmp)\b/.test(message)
+    || /\bat\s+\S+\s+\(/.test(message)
+    || /\b(?:ECONNREFUSED|ENOENT|EACCES|EADDRINUSE|SQLITE_)/.test(message);
+  if (looksInternal) return fallback;
+  return message;
+}
+const fail = (res, status, error, fallback) => res.status(status).json({ error: safeMessage(error, fallback) });
+
+// Discord is the source of truth for who may manage a server. The login list is
+// cached for a few minutes so that revoking Manage Server takes effect quickly
+// instead of lingering for the lifetime of the session.
+const guildRefreshes = new Map();
+const GUILD_HARD_EXPIRY_MS = 60 * 60 * 1000;
+
+async function fetchDiscordGuilds(accessToken) {
+  const response = await fetch('https://discord.com/api/users/@me/guilds', { headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw Object.assign(new Error(`Discord returned ${response.status}`), { status: response.status });
+  const data = await response.json();
+  if (!Array.isArray(data)) throw new Error('Discord returned an unexpected guild list.');
+  return data;
+}
+
+function refreshGuilds(req) {
+  const sid = req.sessionID;
+  if (guildRefreshes.has(sid)) return guildRefreshes.get(sid);
+  const pending = (async () => {
+    try {
+      req.session.guilds = await fetchDiscordGuilds(req.session.accessToken);
+      req.session.guildsFetchedAt = Date.now();
+    } catch (error) {
+      console.warn('[discord] guild refresh failed:', error.message);
+      // Revoked or expired authorization must not keep granting access. A
+      // transient failure keeps the cached list until the hard expiry passes.
+      const expired = error.status === 401 || error.status === 403;
+      if (expired || Date.now() - Number(req.session.guildsFetchedAt || 0) > GUILD_HARD_EXPIRY_MS) {
+        req.session.guilds = [];
+        req.session.guildsFetchedAt = Date.now();
+      }
+    }
+    await new Promise((resolve) => req.session.save(() => resolve()));
+  })().finally(() => guildRefreshes.delete(sid));
+  guildRefreshes.set(sid, pending);
+  return pending;
+}
+
+async function ensureFreshGuilds(req, res, next) {
+  if (!req.session?.user) return next();
+  if (Date.now() - Number(req.session.guildsFetchedAt || 0) < config.guildCacheMs) return next();
+  if (!req.session.accessToken) { req.session.guilds = []; return next(); }
+  await refreshGuilds(req).catch(() => {});
+  next();
+}
+app.use('/api', ensureFreshGuilds);
 
 const redirect = (res, path) => res.redirect(`${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`);
 function requireLogin(req, res, next) { if (!req.session.user) return res.status(401).json({ error: 'Login required.' }); next(); }
@@ -79,38 +157,60 @@ app.get('/auth/login', authLimiter, (req, res) => {
 
 app.get('/auth/callback', authLimiter, async (req, res) => {
   try {
-    const expectedState = req.session.oauthState;
+    // The bot-invite flow returns through this same callback, so either
+    // outstanding state is acceptable. Both are cleared either way.
+    const expected = [req.session.oauthState, req.session.inviteState].filter(Boolean);
     delete req.session.oauthState;
-    if (typeof req.query.code !== 'string' || req.query.code.length > 2048 || !validOAuthState(req.query.state, expectedState)) return res.status(400).send('Invalid or expired OAuth state. Please start the Discord login again.');
+    delete req.session.inviteState;
+    const stateValid = expected.some((value) => validOAuthState(req.query.state, value));
+    if (typeof req.query.code !== 'string' || req.query.code.length > 2048 || !stateValid) return res.status(400).send('Invalid or expired OAuth state. Please start the Discord login again.');
     const tokenResponse = await fetch('https://discord.com/api/oauth2/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: config.clientId, client_secret: config.clientSecret, grant_type: 'authorization_code', code: req.query.code, redirect_uri: config.redirectUri }) });
     const token = await tokenResponse.json();
     if (!token.access_token) throw new Error('Discord did not return an access token.');
     const headers = { Authorization: `Bearer ${token.access_token}` };
     const [user, guilds] = await Promise.all([fetch('https://discord.com/api/users/@me', { headers }).then((r) => r.json()), fetch('https://discord.com/api/users/@me/guilds', { headers }).then((r) => r.json())]);
+    if (!user?.id) throw new Error('Discord did not return a user profile.');
+    // Issue a fresh session id at the moment the session gains privileges, so a
+    // session id an attacker planted before login cannot become an authenticated one.
+    await new Promise((resolve, reject) => req.session.regenerate((error) => error ? reject(error) : resolve()));
     req.session.user = user;
     req.session.guilds = Array.isArray(guilds) ? guilds : [];
+    // Kept server-side so that guild permissions can be re-read from Discord
+    // rather than trusted for the whole life of the session.
+    req.session.accessToken = token.access_token;
+    req.session.guildsFetchedAt = Date.now();
     saveUser(user);
     await new Promise((resolve, reject) => req.session.save((error) => error ? reject(error) : resolve()));
     redirect(res, '/');
   } catch (error) { console.error('[oauth]', error); res.status(500).send('Login failed. Please try again.'); }
 });
-app.get('/auth/logout', (req, res) => req.session.destroy(() => res.redirect('/')));
+const logout = (req, res) => req.session.destroy(() => res.redirect('/'));
+app.post('/auth/logout', logout);
+app.get('/auth/logout', logout);
 
-app.get('/api/me', (req, res) => res.json({ user: req.session.user || null }));
-app.get('/api/search', requireLogin, async (req, res) => {
+// Return only the profile fields the dashboard renders rather than the whole
+// Discord user payload.
+app.get('/api/me', (req, res) => {
+  const user = req.session.user;
+  res.json({ user: user ? { id: user.id, username: user.username || '', global_name: user.global_name || null, avatar: user.avatar || null } : null });
+});
+app.get('/api/search', requireLogin, searchLimiter, async (req, res) => {
   try {
     const results = await searchTracks(req.query.q, typeof req.query.provider === 'string' ? req.query.provider : 'youtube');
     res.json({ results });
-  } catch (error) { res.status(400).json({ error: error.message }); }
+  } catch (error) { fail(res, 400, error, 'That search could not be completed.'); }
 });
 app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), libraryUploadsEnabled: config.libraryUploadsEnabled, settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
 app.get('/api/guilds/:guildId/status', requireLogin, requireGuild, (req, res, next) => {
+  const body = (state) => res.json({ status: karaoke.status(req.params.guildId), inviteUrl: inviteUrl(req.params.guildId, state), botPresent: Boolean(client.guilds.cache.get(req.params.guildId)) });
+  // The dashboard polls this every few seconds. Reuse the invite state while it
+  // is still valid so that polling neither rewrites the session on every request
+  // nor invalidates the state behind an invite link the user is about to click.
+  // It is kept apart from `oauthState` so a poll cannot break a login in flight.
+  if (validOAuthState(req.session.inviteState)) return body(req.session.inviteState);
   const state = createOAuthState();
-  req.session.oauthState = state;
-  req.session.save((error) => {
-    if (error) return next(error);
-    res.json({ status: karaoke.status(req.params.guildId), inviteUrl: inviteUrl(req.params.guildId, state), botPresent: Boolean(client.guilds.cache.get(req.params.guildId)) });
-  });
+  req.session.inviteState = state;
+  req.session.save((error) => error ? next(error) : body(state));
 });
 app.get('/api/guilds/:guildId/channels', requireLogin, requireGuild, (req, res) => {
   const guild = client.guilds.cache.get(req.params.guildId);
@@ -123,7 +223,7 @@ app.put('/api/guilds/:guildId/settings', requireLogin, requireGuild, (req, res) 
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     const volume = body.defaultVolume === undefined ? undefined : validateVolume(body.defaultVolume);
     res.json(updateGuild(req.params.guildId, { guildName: discordGuilds(req).find((g) => g.id === req.params.guildId)?.name || '', allowedVoiceChannels: validateDiscordIdList(body.allowedVoiceChannels ?? [], 'Allowed voice channel IDs'), allowedTextChannels: validateDiscordIdList(body.allowedTextChannels ?? [], 'Allowed text channel IDs'), allowedRoles: validateDiscordIdList(body.allowedRoles ?? [], 'Allowed role IDs'), defaultVolume: volume }));
-  } catch (error) { res.status(400).json({ error: error.message }); }
+  } catch (error) { fail(res, 400, error); }
 });
 
 async function parseAudioUpload(req) {
@@ -186,19 +286,19 @@ async function parseAudioUpload(req) {
 app.get('/api/guilds/:guildId/library', requireLogin, requireGuild, (req, res) => {
   res.json({ tracks: listForGuild(req.params.guildId) });
 });
-app.post('/api/guilds/:guildId/library', requireLogin, requireGuild, async (req, res) => {
+app.post('/api/guilds/:guildId/library', requireLogin, requireGuild, uploadLimiter, async (req, res) => {
   if (!config.libraryUploadsEnabled) return res.status(403).json({ error: 'Song uploads are disabled. Set LIBRARY_UPLOADS_ENABLED=true to enable them.' });
   let upload;
   try {
     upload = await parseAudioUpload(req);
     const track = await saveUpload({ sourcePath: upload.tempPath, guildId: req.params.guildId, userId: req.session.user.id, title: upload.fields.title, artist: upload.fields.artist, filename: upload.filename });
     res.status(201).json(track);
-  } catch (error) { res.status(400).json({ error: error.message }); }
+  } catch (error) { fail(res, 400, error); }
   finally { if (upload?.tempDir) await fsp.rm(upload.tempDir, { recursive: true, force: true }).catch(() => {}); }
 });
 app.delete('/api/guilds/:guildId/library/:fileId', requireLogin, requireGuild, async (req, res) => {
   try { res.json(await removeFromGuild(req.params.guildId, req.params.fileId)); }
-  catch (error) { res.status(400).json({ error: error.message }); }
+  catch (error) { fail(res, 400, error); }
 });
 
 async function requesterVoiceMember(guild, userId) {
@@ -240,10 +340,18 @@ function control(method) {
       if (method === 'resume') karaoke.resume(id);
       if (method === 'stop' || method === 'leave') karaoke[method](id);
       res.json({ ok: true });
-    } catch (error) { res.status(400).json({ error: error.message }); }
+    } catch (error) { fail(res, 400, error); }
   };
 }
 for (const [method, path] of [['play', '/api/guilds/:guildId/play'], ['join', '/api/guilds/:guildId/join'], ['remove', '/api/guilds/:guildId/queue/remove'], ['move', '/api/guilds/:guildId/queue/move'], ['clear', '/api/guilds/:guildId/queue/clear'], ['skip', '/api/guilds/:guildId/skip'], ['pause', '/api/guilds/:guildId/pause'], ['resume', '/api/guilds/:guildId/resume'], ['stop', '/api/guilds/:guildId/stop'], ['leave', '/api/guilds/:guildId/leave']]) app.post(path, requireLogin, requireGuild, control(method));
 
 app.get(/.*/, (req, res) => res.sendFile(path.resolve(__dirname, '..', 'public', 'index.html')));
+
+// Final safety net: an unhandled route error must never return a stack trace,
+// which Express does by default outside production.
+app.use((error, req, res, next) => {
+  console.error('[web]', error);
+  if (res.headersSent) return next(error);
+  res.status(500).json({ error: 'Something went wrong. Please try again.' });
+});
 module.exports = { app };

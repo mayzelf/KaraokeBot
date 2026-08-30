@@ -19,8 +19,12 @@ COPY src ./src
 COPY public ./public
 COPY README.md ./README.md
 
-RUN mkdir -p /app/data
+# The bot pipes attacker-supplied audio through ffmpeg and yt-dlp. Run as the
+# unprivileged user the base image already provides so a flaw in either does not
+# land as root. Only the data volume needs to be writable.
+RUN mkdir -p /app/data && chown -R node:node /app/data
 VOLUME ["/app/data"]
 EXPOSE 3000
+USER node
 
 CMD ["node", "src/index.js"]

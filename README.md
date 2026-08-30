@@ -82,7 +82,15 @@ Rebuild the container with `docker compose up -d --build`. Cookies expire or are
 
 ## Security safeguards
 
-Dashboard input is validated again on the server, even when requests do not come from the web interface. Song URLs are restricted to YouTube, Discord IDs and volume values are validated and bounded, request rates are limited, OAuth state is bound to the browser session, dynamic page values are rendered safely, and a restrictive Content Security Policy blocks inline scripts. Set a strong `SESSION_SECRET` of at least 32 characters for production deployments.
+Dashboard input is validated again on the server, even when requests do not come from the web interface. Song URLs are restricted to YouTube and SoundCloud, Discord IDs and volume values are validated and bounded, request rates are limited, OAuth state is bound to the browser session, dynamic page values are rendered safely, and a restrictive Content Security Policy blocks inline scripts.
+
+- **Sessions.** The session id is reissued at login, so a session id planted before login cannot become an authenticated one. Set a strong `SESSION_SECRET` of at least 32 characters; the app refuses to start in production without one, and elsewhere generates a random per-process secret rather than falling back to a shared default.
+- **Permissions.** Server permissions are re-read from Discord every few minutes (`GUILD_CACHE_MINUTES`), so revoking someone's Manage Server takes effect promptly instead of lasting for the life of their session.
+- **Requests.** State-changing requests must carry the dashboard's own origin, on top of the `SameSite=Lax` session cookie.
+- **Media handling.** yt-dlp and FFmpeg never see a shell, ignore local config files, and run under a time limit, an output limit, and a concurrency cap (`MEDIA_TIMEOUT_SECONDS`, `MEDIA_MAX_CONCURRENCY`). Each FFmpeg input is pinned to the protocols it legitimately needs, so a crafted upload or a hostile stream URL cannot be turned into a local file read or a request to an internal service. Stream URLs returned by a Piped instance must be public HTTPS addresses.
+- **Queues.** A queue holds at most `QUEUE_MAX_TRACKS` (100 by default) so one playlist URL cannot exhaust memory.
+- **Errors.** Internal messages, paths, and stack traces are logged rather than returned to the browser.
+- **Containers.** The image runs as the unprivileged `node` user, and Compose drops all capabilities and sets `no-new-privileges`.
 
 ## Credits and licensing
 

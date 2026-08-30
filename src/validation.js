@@ -1,4 +1,7 @@
+const config = require('./config');
+
 const DISCORD_ID = /^\d{15,25}$/;
+const NON_HTTP_SCHEME = /^(?:file|data|javascript|vbscript|blob|jar|ftp|sftp|gopher|ws|wss|about|chrome|resource|php|expect|dict|tcp|rtmp|concat|subfile|crypto|pipe):/i;
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be']);
 const SOUNDCLOUD_HOSTS = new Set(['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com']);
 
@@ -27,6 +30,11 @@ function validateSongQuery(value) {
   if (typeof value !== 'string') throw new Error('Enter a song title, artist, or a supported audio URL.');
   const query = value.trim();
   if (!query || query.length > 300 || /[\u0000-\u001f\u007f]/.test(query)) throw new Error('Song searches must be between 1 and 300 characters.');
+  // A non-http URI must be rejected rather than falling through as a plain
+  // search phrase, since a search phrase is handed to yt-dlp as a bare target.
+  // Titles such as "Song: the remix" are still ordinary searches, so only a
+  // real scheme (`scheme://`) or a known dangerous opaque one is refused.
+  if (NON_HTTP_SCHEME.test(query) || (/^[a-z][a-z0-9+.-]*:\/\//i.test(query) && !/^https?:\/\//i.test(query))) throw new Error('Only YouTube and SoundCloud URLs are supported.');
   if (/^https?:\/\//i.test(query)) {
     let url;
     try { url = new URL(query); } catch { throw new Error('Enter a valid YouTube or SoundCloud URL.'); }
@@ -50,7 +58,7 @@ function validateVolume(value) {
 }
 
 function validateQueueIndex(value) {
-  if (!Number.isInteger(value) || value < 0 || value > 99) throw new Error('Queue position is invalid.');
+  if (!Number.isInteger(value) || value < 0 || value >= config.queueMaxTracks) throw new Error('Queue position is invalid.');
   return value;
 }
 

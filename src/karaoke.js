@@ -3,6 +3,7 @@ const {
   StreamType, VoiceConnectionStatus, entersState
 } = require('@discordjs/voice');
 const { ActivityType, EmbedBuilder } = require('discord.js');
+const config = require('./config');
 const { ensureGuild, getGuild } = require('./db');
 const { resolveTracks, createAudioStream } = require('./media');
 const { findLyrics, currentLine } = require('./lyrics');
@@ -116,6 +117,12 @@ class KaraokeManager {
   async add(guild, query, voiceChannel, textChannel, requesterId = null) {
     const session = await this.join(guild, voiceChannel, textChannel, requesterId);
     const tracks = query && typeof query === 'object' && query.source === 'library' ? [query] : await resolveTracks(query);
+    // A single playlist URL can otherwise grow the queue without bound, which
+    // both exhausts memory and puts entries beyond the reach of the queue
+    // editing controls.
+    const room = config.queueMaxTracks - session.queue.length;
+    if (room <= 0) throw new Error(`The queue is full (${config.queueMaxTracks} tracks). Remove a track before adding more.`);
+    if (tracks.length > room) tracks.length = room;
     tracks.forEach((track) => { track.requestedBy = requesterId; });
     session.queue.push(...tracks);
     if (!session.current) await this.next(guild.id);

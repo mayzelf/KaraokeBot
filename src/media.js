@@ -1,6 +1,20 @@
 const { spawn } = require('node:child_process');
 const config = require('./config');
+const { createLimiter, runCommand } = require('./proc');
 const { isSoundCloudUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateSongQuery } = require('./validation');
+// yt-dlp and ffmpeg are the only places where request data reaches an external
+// program. Bound how many can run at once so that a burst of authenticated
+// searches cannot exhaust the host's processes or memory.
+const limitMedia = createLimiter(config.mediaMaxConcurrency);
+// Never read an operator's or a stray user's yt-dlp config file: it can add
+// arbitrary options, including --exec.
+const YTDLP_SAFETY_ARGS = ['--ignore-config', '--no-exec', '--socket-timeout', '15', '--retries', '2'];
+// FFmpeg accepts remote protocols inside containers and playlists. Restrict the
+// protocols per input so that a crafted file or a hostile stream URL cannot be
+// turned into an SSRF or a local file read.
+const FFMPEG_LOCAL_PROTOCOLS = ['-protocol_whitelist', 'file'];
+const FFMPEG_PIPE_PROTOCOLS = ['-protocol_whitelist', 'pipe'];
+const FFMPEG_REMOTE_PROTOCOLS = ['-protocol_whitelist', 'https,tls,tcp,crypto'];
 // The base image includes Node 22. yt-dlp requires a JS runtime for YouTube's
 // challenge solving; enable Node explicitly instead of relying on detection.
 const YTDLP_RUNTIME_ARGS = ['--js-runtimes', 'node'];
@@ -31,19 +45,26 @@ function ytDlpError(stderr, code) {
   if (/\b(?:not available|unavailable|private|removed|blocked)\b/i.test(detail || '')) {
     return new Error('That YouTube video is unavailable, private, or blocked. Please choose another track.');
   }
-  return new Error(detail?.replace(/^ERROR:\s*/i, '') || `yt-dlp could not process the request (exit code ${code}).`);
+  if (/\b(?:age|sign in|login|confirm your age)\b/i.test(detail || '')) {
+    return new Error('That track requires a signed-in account and cannot be played.');
+  }
+  // The remaining yt-dlp errors can name container paths, the cookie file, and
+  // internal endpoints. Log them, but do not relay them to a dashboard user.
+  console.warn('[yt-dlp]', detail || `exit code ${code}`);
+  return new Error('That track could not be loaded from the media provider.');
 }
 
-function runYtDlp(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0 ? resolve(stdout) : reject(ytDlpError(stderr, code)));
-  });
+// `target` is the only argument derived from user input. It is passed after
+// `--` so that a value beginning with a dash can never become an option.
+async function runYtDlp(args, target) {
+  const argv = [...YTDLP_RUNTIME_ARGS, ...YTDLP_SAFETY_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, ...args, ...(target ? ['--', target] : [])];
+  try {
+    const { stdout } = await limitMedia(() => runCommand('yt-dlp', argv, { timeoutMs: config.mediaTimeoutMs }));
+    return stdout;
+  } catch (error) {
+    if (error.stderr !== undefined) throw ytDlpError(error.stderr, error.code);
+    throw new Error('The media provider could not be reached.');
+  }
 }
 
 function cleanMetadata(value, fallback = '', limit = 200) {
@@ -97,13 +118,13 @@ function previewSoundCloud(data) {
 }
 
 async function searchYouTube(cleanQuery) {
-  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings', `ytsearch5:${cleanQuery}`]);
+  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings'], `ytsearch5:${cleanQuery}`);
   const data = parseJson(output, 'YouTube returned an invalid search response.');
   return (Array.isArray(data.entries) ? data.entries : []).map((item) => previewYouTube(item)).filter(Boolean);
 }
 
 async function searchSoundCloud(cleanQuery) {
-  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings', `scsearch5:${cleanQuery}`]);
+  const output = await runYtDlp(['--flat-playlist', '--playlist-end', '5', '--dump-single-json', '--no-warnings'], `scsearch5:${cleanQuery}`);
   const data = parseJson(output, 'SoundCloud returned an invalid search response.');
   return (Array.isArray(data.entries) ? data.entries : []).map(previewSoundCloud).filter(Boolean);
 }
@@ -179,6 +200,21 @@ async function searchTracks(query, provider = 'youtube') {
   throw youtubeError || new Error('No YouTube results were found.');
 }
 
+// A Piped instance is a third party. Its stream URL is handed straight to
+// FFmpeg, so anything other than a plain HTTPS URL - file://, an internal
+// address, a shell-looking value - has to be rejected before it gets there.
+function safeStreamUrl(value) {
+  if (typeof value !== 'string' || value.length > 4096) return null;
+  let url;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== 'https:') return null;
+  const host = url.hostname.toLowerCase();
+  const isLoopback = host === 'localhost' || host === '::1' || /^127\./.test(host);
+  const isPrivate = /^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host);
+  if (isLoopback || isPrivate) return null;
+  return url.toString();
+}
+
 function addPrivateStreamUrl(track, streamUrl) {
   Object.defineProperty(track, 'streamUrl', { value: streamUrl, enumerable: false });
   return track;
@@ -187,9 +223,10 @@ function addPrivateStreamUrl(track, streamUrl) {
 async function resolvePipedTrack(url, fallbackTitle = 'YouTube track') {
   const id = youtubeId(url);
   if (!id) throw new Error('Piped could not identify that YouTube video.');
-  const data = await pipedRequest(`/streams/${encodeURIComponent(id)}`, {}, (value) => (value.audioStreams || []).some((stream) => stream.url && !stream.videoOnly));
-  const audio = (data.audioStreams || []).filter((stream) => stream.url && !stream.videoOnly).sort((left, right) => Number(right.bitrate || 0) - Number(left.bitrate || 0))[0];
+  const data = await pipedRequest(`/streams/${encodeURIComponent(id)}`, {}, (value) => (value.audioStreams || []).some((stream) => !stream.videoOnly && safeStreamUrl(stream.url)));
+  const audio = (data.audioStreams || []).filter((stream) => !stream.videoOnly && safeStreamUrl(stream.url)).sort((left, right) => Number(right.bitrate || 0) - Number(left.bitrate || 0))[0];
   if (!audio) throw new Error('Piped did not return a playable audio stream.');
+  const streamUrl = safeStreamUrl(audio.url);
   const track = {
     id,
     url: validateSongQuery(`https://www.youtube.com/watch?v=${encodeURIComponent(id)}`),
@@ -200,11 +237,11 @@ async function resolvePipedTrack(url, fallbackTitle = 'YouTube track') {
     duration: Number(data.duration || 0),
     thumbnail: safeYouTubeThumbnail(data.thumbnail)
   };
-  return addPrivateStreamUrl(track, audio.url);
+  return addPrivateStreamUrl(track, streamUrl);
 }
 
 async function resolveWithYtDlp(target, fallback, source) {
-  const output = await runYtDlp(['--dump-single-json', '--no-playlist', '--skip-download', target]);
+  const output = await runYtDlp(['--dump-single-json', '--no-playlist', '--skip-download'], target);
   const data = parseJson(output, 'The media provider returned an invalid response.');
   if (!data.webpage_url || !data.id) throw new Error('No playable YouTube result was found.');
   const playableUrl = validateSongQuery(data.webpage_url);
@@ -222,9 +259,11 @@ async function resolveWithYtDlp(target, fallback, source) {
 }
 
 async function resolvePlaylist(query) {
-  const output = await runYtDlp(['--flat-playlist', '--dump-single-json', '--no-warnings', query]);
+  // A public playlist can hold thousands of entries. Refuse to pull more than a
+  // queue can hold so that one request cannot exhaust memory or the queue.
+  const output = await runYtDlp(['--flat-playlist', '--playlist-end', String(config.queueMaxTracks), '--dump-single-json', '--no-warnings'], query);
   const data = parseJson(output, 'The playlist provider returned an invalid response.');
-  const entries = Array.isArray(data.entries) ? data.entries : [];
+  const entries = (Array.isArray(data.entries) ? data.entries : []).slice(0, config.queueMaxTracks);
   const tracks = entries.map((entry) => isSoundCloudUrl(query) ? previewSoundCloud(entry) : previewYouTube(entry)).filter(Boolean);
   if (!tracks.length) throw new Error('That playlist is empty or contains no playable tracks.');
   return tracks;
@@ -265,9 +304,9 @@ async function resolveTracks(query) {
 function createAudioStream(track) {
   if (track.source === 'library' && track.path) return createLibraryAudioStream(track.path);
   if (track.source === 'piped' && track.streamUrl) return createRemoteAudioStream(track.streamUrl);
-  const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_SAFETY_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', '--', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-i', 'pipe:0',
+    '-hide_banner', '-loglevel', 'error', ...FFMPEG_PIPE_PROTOCOLS, '-i', 'pipe:0',
     // Normalize different source videos to a consistent perceived loudness
     // before Discord receives the raw PCM stream. The dashboard volume is
     // applied afterward as the final user-controlled gain.
@@ -297,8 +336,10 @@ function createAudioStream(track) {
 }
 
 function createRemoteAudioStream(streamUrl) {
+  const target = safeStreamUrl(streamUrl);
+  if (!target) throw new Error('That stream URL is not allowed.');
   const ffmpeg = spawn('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-i', streamUrl,
+    '-hide_banner', '-loglevel', 'error', ...FFMPEG_REMOTE_PROTOCOLS, '-i', target,
     '-vn', '-map', '0:a:0',
     '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
@@ -313,7 +354,7 @@ function createRemoteAudioStream(streamUrl) {
 
 function createLibraryAudioStream(filePath) {
   const ffmpeg = spawn('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-i', filePath,
+    '-hide_banner', '-loglevel', 'error', ...FFMPEG_LOCAL_PROTOCOLS, '-i', filePath,
     '-vn', '-map', '0:a:0',
     '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'

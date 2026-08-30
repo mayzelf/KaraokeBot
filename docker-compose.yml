@@ -3,6 +3,13 @@ services:
     build: .
     container_name: karaoke-bot
     restart: unless-stopped
+    init: true
+    # yt-dlp and ffmpeg run on untrusted input. Drop everything the container
+    # does not need so a break-out has nothing to escalate with.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       - bgutil-provider
     env_file:
@@ -26,6 +33,10 @@ services:
     container_name: karaoke-pot-provider
     restart: unless-stopped
     init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     expose:
       - "4416"
 

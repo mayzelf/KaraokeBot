@@ -1,11 +1,17 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const fsp = fs.promises;
-const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const config = require('./config');
+const { createLimiter, runCommand } = require('./proc');
 const { db } = require('./db');
+
+// Uploaded audio is attacker-controlled. FFmpeg happily follows remote
+// references inside containers and playlists, so every local invocation is
+// pinned to the file protocol to keep a crafted upload from reading the host
+// filesystem or reaching internal services.
+const FFMPEG_LOCAL_PROTOCOLS = ['-protocol_whitelist', 'file'];
+const limitTranscode = createLimiter(config.mediaMaxConcurrency);
 
 let operationQueue = Promise.resolve();
 
@@ -38,22 +44,14 @@ function ensureLibraryPath() {
   fs.mkdirSync(config.libraryPath, { recursive: true });
 }
 
-function runTool(command, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (code) => code === 0 ? resolve({ stdout, stderr }) : reject(new Error(stderr.trim() || `${command} failed.`)));
-  });
+function runTool(command, args, timeoutMs) {
+  return limitTranscode(() => runCommand(command, args, { timeoutMs, maxOutputBytes: 4 * 1024 * 1024 }));
 }
 
 async function probe(filePath) {
   let output;
   try {
-    output = await runTool('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_streams', '-show_format', filePath]);
+    output = await runTool('ffprobe', ['-v', 'error', ...FFMPEG_LOCAL_PROTOCOLS, '-print_format', 'json', '-show_streams', '-show_format', filePath], 20_000);
   } catch {
     throw new Error('That file is not a readable audio file.');
   }
@@ -81,14 +79,21 @@ async function hashFile(filePath) {
 }
 
 async function transcode(sourcePath, destinationPath) {
-  await runTool('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error', '-y', '-i', sourcePath,
-    '-vn', '-map', '0:a:0', '-map_metadata', '-1',
-    '-c:a', 'libopus', '-b:a', '128k', '-vbr', 'on', '-application', 'audio',
-    '-ar', '48000', '-ac', '2',
-    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
-    '-f', 'ogg', destinationPath
-  ]);
+  try {
+    await runTool('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error', '-y', ...FFMPEG_LOCAL_PROTOCOLS, '-i', sourcePath,
+      '-vn', '-map', '0:a:0', '-map_metadata', '-1',
+      '-c:a', 'libopus', '-b:a', '128k', '-vbr', 'on', '-application', 'audio',
+      '-ar', '48000', '-ac', '2',
+      '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+      '-f', 'ogg', destinationPath
+    ], config.mediaTimeoutMs * 4);
+  } catch (error) {
+    // FFmpeg's stderr names container paths and codec internals; log it instead
+    // of returning it to the uploader.
+    console.warn('[ffmpeg] transcode failed:', error.stderr?.trim() || error.message);
+    throw new Error('That audio file could not be converted. Try a different file or format.');
+  }
 }
 
 function usage(guildId, userId) {
