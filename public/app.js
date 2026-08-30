@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0 };
+const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -107,7 +107,9 @@ async function selectGuild(guild) {
       </div>
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">ROOM CONTROLS</div><h3>Playback</h3></div><span class="panel-symbol">♪</span></div>
         <div class="voice-select"><label for="voice-channel">Voice channel</label><select class="input" id="voice-channel"><option value="">Use my current channel</option></select></div>
-        <div class="playback-actions"><button class="control alt" id="join">Join</button><button class="control alt" id="resume">Resume</button><button class="control alt" id="pause">Pause</button><button class="control alt" id="skip">Skip</button><button class="control alt" id="stop">Stop</button></div>
+        <div class="playback-actions"><button class="control alt" id="join">Join</button><button class="control alt" id="resume">Resume</button><button class="control alt" id="pause">Pause</button><button class="control alt" id="skip">Skip</button><button class="control alt" id="stop">Stop</button><button class="control alt" id="instrumental" type="button" aria-pressed="false" title="Reduce the lead vocal by cancelling the centre channel">Instrumental</button></div>
+        <div class="voice-select"><label for="room-volume">Volume</label><div class="range-row"><input class="input" id="room-volume" type="range" min="0" max="1" step="0.05"><span class="range-value" id="room-volume-value">80%</span></div></div>
+        <p class="help">Volume applies to the song playing right now. Set the starting volume for future sessions under server preferences.</p>
         <div id="now" class="queue"></div>
       </div>
     </div>
@@ -493,6 +495,13 @@ function renderSearchResults(results) {
   });
   container.classList.remove('hidden');
 }
+function renderInstrumental() {
+  const button = $('#instrumental');
+  if (!button) return;
+  button.className = state.instrumental ? 'control control-accent' : 'control alt';
+  button.setAttribute('aria-pressed', String(Boolean(state.instrumental)));
+}
+
 function updateSearchProvider() {
   const isSoundCloud = state.searchProvider === 'soundcloud';
   document.querySelectorAll('.provider-tab').forEach((button) => {
@@ -545,6 +554,28 @@ function bindControls(guild) {
   $('#join').onclick = () => action('join', { channelId: $('#voice-channel').value || null });
   $('#resume').onclick = () => action('resume'); $('#pause').onclick = () => action('pause'); $('#skip').onclick = () => action('skip'); $('#stop').onclick = () => action('stop');
   $('#clear-queue').onclick = () => action('queue/clear');
+  $('#instrumental').onclick = async () => {
+    const button = $('#instrumental');
+    button.disabled = true;
+    try {
+      const data = await api(guildPath('instrumental'), { method: 'POST', body: JSON.stringify({ enabled: !state.instrumental }) });
+      state.instrumental = data.instrumental === true;
+      renderInstrumental();
+      $('#notice').textContent = state.instrumental
+        ? 'Instrumental mode on. Centred drums and bass fade along with the vocal.'
+        : 'Instrumental mode off.';
+      refresh(guild, state.viewRequest);
+    } catch (error) { $('#notice').textContent = error.message; }
+    finally { button.disabled = false; }
+  };
+  // The slider drives the live gain; releasing it sends one request rather than
+  // one per pixel of travel.
+  const roomVolume = $('#room-volume');
+  roomVolume.oninput = () => { $('#room-volume-value').textContent = `${Math.round(Number(roomVolume.value) * 100)}%`; };
+  roomVolume.onchange = async () => {
+    try { await api(guildPath('volume'), { method: 'POST', body: JSON.stringify({ volume: Number(roomVolume.value) }) }); }
+    catch (error) { $('#notice').textContent = error.message; }
+  };
   bindSearch();
   bindLibrary(guild);
   $('#volume').oninput = () => { $('#volume-value').textContent = `${Math.round(Number($('#volume').value) * 100)}%`; };
@@ -562,6 +593,14 @@ async function refresh(guild, viewRequest = state.viewRequest) {
     status.textContent = data.botPresent ? (data.status.connected ? 'Live in voice' : 'Bot online') : 'Bot not installed';
     status.className = `status-pill${data.status.connected ? ' live' : ''}`;
     $('#resume').textContent = data.status.paused ? 'Resume' : 'Play';
+    state.instrumental = data.status.instrumental === true;
+    renderInstrumental();
+    const roomVolume = $('#room-volume');
+    // Never overwrite the slider while it is being dragged.
+    if (roomVolume && document.activeElement !== roomVolume) {
+      roomVolume.value = data.status.volume;
+      $('#room-volume-value').textContent = `${Math.round(Number(data.status.volume) * 100)}%`;
+    }
     renderQueue(data.status.queue, guild);
     if (data.status.current) {
       renderNowPlaying(data.status.current, data.status.paused, data.status.elapsed);

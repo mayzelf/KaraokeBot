@@ -49,6 +49,14 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_guild_library_guild ON guild_library(guild_id);
 `);
 
+// CREATE TABLE IF NOT EXISTS leaves existing installations untouched, so new
+// columns are added separately and only when they are missing.
+function addColumn(table, column, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+  if (!columns.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('guild_settings', 'instrumental', 'INTEGER NOT NULL DEFAULT 0');
+
 function parseJson(value, fallback = []) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
@@ -66,7 +74,8 @@ function getGuild(guildId) {
     ...row,
     allowedVoiceChannels: parseJson(row.allowed_voice_channels),
     allowedTextChannels: parseJson(row.allowed_text_channels),
-    allowedRoles: parseJson(row.allowed_roles)
+    allowedRoles: parseJson(row.allowed_roles),
+    instrumental: row.instrumental === 1
   };
 }
 
@@ -74,13 +83,14 @@ function updateGuild(guildId, patch) {
   const current = ensureGuild(guildId, patch.guildName || '');
   db.prepare(`UPDATE guild_settings SET
       guild_name = ?, allowed_voice_channels = ?, allowed_text_channels = ?,
-      allowed_roles = ?, default_volume = ?, updated_at = CURRENT_TIMESTAMP
+      allowed_roles = ?, default_volume = ?, instrumental = ?, updated_at = CURRENT_TIMESTAMP
     WHERE guild_id = ?`).run(
       patch.guildName ?? current.guild_name,
       JSON.stringify(patch.allowedVoiceChannels ?? current.allowedVoiceChannels),
       JSON.stringify(patch.allowedTextChannels ?? current.allowedTextChannels),
       JSON.stringify(patch.allowedRoles ?? current.allowedRoles),
       Math.min(1, Math.max(0, Number(patch.defaultVolume ?? current.default_volume))),
+      (patch.instrumental ?? current.instrumental) ? 1 : 0,
       guildId
     );
   return getGuild(guildId);

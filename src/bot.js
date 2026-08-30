@@ -1,8 +1,9 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const config = require('./config');
-const { ensureGuild } = require('./db');
+const { ensureGuild, getGuild, updateGuild } = require('./db');
 const { KaraokeManager } = require('./karaoke');
 const { createOAuthState } = require('./oauth');
+const { validateVolume } = require('./validation');
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates] });
 const karaoke = new KaraokeManager(client);
@@ -15,7 +16,9 @@ const commands = [
   new SlashCommandBuilder().setName('pause').setDescription('Pause the karaoke'),
   new SlashCommandBuilder().setName('resume').setDescription('Resume the karaoke'),
   new SlashCommandBuilder().setName('stop').setDescription('Stop playback and clear the queue'),
-  new SlashCommandBuilder().setName('queue').setDescription('Show the karaoke queue')
+  new SlashCommandBuilder().setName('queue').setDescription('Show the karaoke queue'),
+  new SlashCommandBuilder().setName('volume').setDescription('Set the playback volume for this room').addIntegerOption((o) => o.setName('level').setDescription('Volume percentage from 0 to 100').setMinValue(0).setMaxValue(100).setRequired(true)),
+  new SlashCommandBuilder().setName('instrumental').setDescription('Reduce the lead vocal so the room can sing it').addBooleanOption((o) => o.setName('on').setDescription('Leave empty to toggle'))
 ].map((command) => command.setDMPermission(false).toJSON());
 
 async function registerCommands() {
@@ -60,6 +63,24 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'pause') { karaoke.pause(interaction.guildId); return interaction.reply('Paused.'); }
     if (command === 'resume') { karaoke.resume(interaction.guildId); return interaction.reply('Resumed.'); }
     if (command === 'stop') { karaoke.stop(interaction.guildId); return interaction.reply('Stopped and cleared the queue.'); }
+    if (command === 'volume') {
+      const level = interaction.options.getInteger('level');
+      karaoke.setVolume(interaction.guildId, validateVolume(level / 100));
+      return interaction.reply(`Volume set to ${level}%.`);
+    }
+    if (command === 'instrumental') {
+      const settings = getGuild(interaction.guildId) || ensureGuild(interaction.guildId, interaction.guild?.name || '');
+      const requested = interaction.options.getBoolean('on');
+      const enabled = requested === null ? !settings.instrumental : requested;
+      updateGuild(interaction.guildId, { instrumental: enabled });
+      await interaction.deferReply();
+      // A filter change means a new FFmpeg process, so the current song starts over.
+      const restarted = await karaoke.restartCurrent(interaction.guildId);
+      const note = restarted ? ' Restarting the current song.' : '';
+      return interaction.editReply(enabled
+        ? `Instrumental mode is **on**. The lead vocal is reduced by cancelling the centre channel, so centred drums and bass fade too.${note}`
+        : `Instrumental mode is **off**.${note}`);
+    }
     if (command === 'queue') {
       const status = karaoke.status(interaction.guildId);
       const songs = [status.current, ...status.queue].filter(Boolean).map((track, i) => `${i + 1}. **${track.title}**`).join('\n') || 'The queue is empty.';

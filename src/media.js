@@ -15,6 +15,17 @@ const YTDLP_SAFETY_ARGS = ['--ignore-config', '--no-exec', '--socket-timeout', '
 const FFMPEG_LOCAL_PROTOCOLS = ['-protocol_whitelist', 'file'];
 const FFMPEG_PIPE_PROTOCOLS = ['-protocol_whitelist', 'pipe'];
 const FFMPEG_REMOTE_PROTOCOLS = ['-protocol_whitelist', 'https,tls,tcp,crypto'];
+// Normalize different sources to a consistent perceived loudness before Discord
+// receives the raw PCM. The dashboard volume is applied afterward as the final
+// user-controlled gain.
+const LOUDNORM_FILTER = 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true';
+// Karaoke on a budget: most mixes put the lead vocal dead center, so subtracting
+// the channels from each other cancels much of it. This is a matrix multiply,
+// not source separation - it costs nothing measurable, but it also removes
+// anything else centered (kick, snare, bass) and leaves the vocal's reverb tail.
+// Both output channels carry the same signal so a mono downmix cannot cancel it.
+const INSTRUMENTAL_FILTER = 'pan=stereo|c0=0.5*c0-0.5*c1|c1=0.5*c0-0.5*c1';
+const audioFilter = ({ instrumental } = {}) => (instrumental ? `${INSTRUMENTAL_FILTER},${LOUDNORM_FILTER}` : LOUDNORM_FILTER);
 // The base image includes Node 22. yt-dlp requires a JS runtime for YouTube's
 // challenge solving; enable Node explicitly instead of relying on detection.
 const YTDLP_RUNTIME_ARGS = ['--js-runtimes', 'node'];
@@ -301,16 +312,13 @@ async function resolveTracks(query) {
   return [await resolveTrack(cleanQuery)];
 }
 
-function createAudioStream(track) {
-  if (track.source === 'library' && track.path) return createLibraryAudioStream(track.path);
-  if (track.source === 'piped' && track.streamUrl) return createRemoteAudioStream(track.streamUrl);
+function createAudioStream(track, options = {}) {
+  if (track.source === 'library' && track.path) return createLibraryAudioStream(track.path, options);
+  if (track.source === 'piped' && track.streamUrl) return createRemoteAudioStream(track.streamUrl, options);
   const ytdlp = spawn('yt-dlp', [...YTDLP_RUNTIME_ARGS, ...YTDLP_SAFETY_ARGS, ...YTDLP_EXTRACTOR_ARGS, ...YTDLP_AUTH_ARGS, '--no-playlist', '-f', 'bestaudio/best', '-o', '-', '--', track.url], { stdio: ['ignore', 'pipe', 'pipe'] });
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', ...FFMPEG_PIPE_PROTOCOLS, '-i', 'pipe:0',
-    // Normalize different source videos to a consistent perceived loudness
-    // before Discord receives the raw PCM stream. The dashboard volume is
-    // applied afterward as the final user-controlled gain.
-    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+    '-af', audioFilter(options),
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
   ], { stdio: ['pipe', 'pipe', 'pipe'] });
   const stream = ffmpeg.stdout;
@@ -335,13 +343,13 @@ function createAudioStream(track) {
   return stream;
 }
 
-function createRemoteAudioStream(streamUrl) {
+function createRemoteAudioStream(streamUrl, options = {}) {
   const target = safeStreamUrl(streamUrl);
   if (!target) throw new Error('That stream URL is not allowed.');
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', ...FFMPEG_REMOTE_PROTOCOLS, '-i', target,
     '-vn', '-map', '0:a:0',
-    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+    '-af', audioFilter(options),
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
   const stream = ffmpeg.stdout;
@@ -352,11 +360,11 @@ function createRemoteAudioStream(streamUrl) {
   return stream;
 }
 
-function createLibraryAudioStream(filePath) {
+function createLibraryAudioStream(filePath, options = {}) {
   const ffmpeg = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error', ...FFMPEG_LOCAL_PROTOCOLS, '-i', filePath,
     '-vn', '-map', '0:a:0',
-    '-af', 'loudnorm=I=-16:TP=-1.5:LRA=11:dual_mono=true',
+    '-af', audioFilter(options),
     '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
   const stream = ffmpeg.stdout;

@@ -66,7 +66,11 @@ class KaraokeManager {
       queue: [], connection: null, player: createAudioPlayer({ behaviors: { maxMissedFrames: 50 } }), current: null,
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
       startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
-      lastCompleted: null, nextPromise: null, onPlaying: null, playbackToken: 0
+      lastCompleted: null, nextPromise: null, onPlaying: null, playbackToken: 0,
+      // `volume` is null until someone sets one for this session; the guild
+      // default applies until then. `resource` is kept so the gain can be
+      // changed while a track is playing instead of only at track start.
+      volume: null, resource: null
     });
     const session = this.sessions.get(guildId);
     if (!session.bound) {
@@ -206,6 +210,7 @@ class KaraokeManager {
     const previousStream = session.stream;
     const playbackToken = ++session.playbackToken;
     session.stream = null;
+    session.resource = null;
     if (session.onPlaying) {
       session.player.off(AudioPlayerStatus.Playing, session.onPlaying);
       session.onPlaying = null;
@@ -230,14 +235,18 @@ class KaraokeManager {
       return;
     }
     const track = session.current;
-    track.lyrics = await findLyrics({ artist: track.artist, title: track.title });
-    session.stream = createAudioStream(track);
+    // `undefined` means the lookup has not happened; `null` means it happened
+    // and found nothing. Replaying a track must not re-query LRCLIB.
+    if (track.lyrics === undefined) track.lyrics = await findLyrics({ artist: track.artist, title: track.title });
+    const settings = getGuild(guildId);
+    session.stream = createAudioStream(track, { instrumental: Boolean(settings?.instrumental) });
     const resource = createAudioResource(session.stream, {
       inputType: StreamType.Raw,
       inlineVolume: true,
       metadata: { playbackToken }
     });
-    resource.volume?.setVolume(getGuild(guildId)?.default_volume ?? 0.8);
+    session.resource = resource;
+    resource.volume?.setVolume(session.volume ?? settings?.default_volume ?? 0.8);
     const onPlaying = () => {
       session.onPlaying = null;
       if (session.playbackToken !== playbackToken || session.current !== track || session.startedAt) return;
@@ -295,7 +304,38 @@ class KaraokeManager {
 
   status(guildId) {
     const session = this.session(guildId);
-    return { connected: Boolean(session.connection), current: session.current, lastCompleted: session.lastCompleted, queue: session.queue, paused: session.player.state.status === AudioPlayerStatus.Paused, elapsed: this.elapsed(session) };
+    const settings = getGuild(guildId);
+    return {
+      connected: Boolean(session.connection), current: session.current, lastCompleted: session.lastCompleted,
+      queue: session.queue, paused: session.player.state.status === AudioPlayerStatus.Paused,
+      elapsed: this.elapsed(session),
+      volume: session.volume ?? settings?.default_volume ?? 0.8,
+      instrumental: Boolean(settings?.instrumental)
+    };
+  }
+
+  // Applies to the track already playing, not just the next one, because the
+  // resource is created with inlineVolume and kept on the session.
+  setVolume(guildId, volume) {
+    const session = this.session(guildId);
+    session.volume = volume;
+    session.resource?.volume?.setVolume(volume);
+    this.updatePresence();
+    return volume;
+  }
+
+  // Restart the playing track from the beginning, which is how a filter change
+  // such as instrumental mode takes effect. The track is pushed back onto the
+  // head of the queue so the restart reuses the same transition path as any
+  // other track change rather than duplicating that state machine.
+  async restartCurrent(guildId) {
+    const session = this.session(guildId);
+    if (!session.current) return false;
+    session.queue.unshift(session.current);
+    // The track is restarting, not finishing, so suppress the "song ended" edit.
+    session.lyricMessage = null;
+    await this.next(guildId);
+    return true;
   }
 
   pause(guildId) {
@@ -359,6 +399,8 @@ class KaraokeManager {
     }
     this.disposeStream(session.stream);
     session.stream = null;
+    session.resource = null;
+    session.volume = null;
     if (session.lyricTimer) clearInterval(session.lyricTimer);
     session.lyricTimer = null;
     if (session.connection) session.connection.destroy();

@@ -335,6 +335,17 @@ function control(method) {
       if (method === 'clear') {
         return res.json({ removed: karaoke.clearQueue(id) });
       }
+      if (method === 'volume') {
+        return res.json({ volume: karaoke.setVolume(id, validateVolume(body.volume)) });
+      }
+      if (method === 'instrumental') {
+        const enabled = body.enabled === true;
+        updateGuild(id, { instrumental: enabled });
+        // Changing the filter means rebuilding the FFmpeg chain, so the current
+        // track restarts from the beginning.
+        const restarted = await karaoke.restartCurrent(id);
+        return res.json({ instrumental: enabled, restarted });
+      }
       if (method === 'skip') await karaoke.skip(id, guild, req.session.user.id);
       if (method === 'pause') karaoke.pause(id);
       if (method === 'resume') karaoke.resume(id);
@@ -343,7 +354,7 @@ function control(method) {
     } catch (error) { fail(res, 400, error); }
   };
 }
-for (const [method, path] of [['play', '/api/guilds/:guildId/play'], ['join', '/api/guilds/:guildId/join'], ['remove', '/api/guilds/:guildId/queue/remove'], ['move', '/api/guilds/:guildId/queue/move'], ['clear', '/api/guilds/:guildId/queue/clear'], ['skip', '/api/guilds/:guildId/skip'], ['pause', '/api/guilds/:guildId/pause'], ['resume', '/api/guilds/:guildId/resume'], ['stop', '/api/guilds/:guildId/stop'], ['leave', '/api/guilds/:guildId/leave']]) app.post(path, requireLogin, requireGuild, control(method));
+for (const [method, path] of [['play', '/api/guilds/:guildId/play'], ['join', '/api/guilds/:guildId/join'], ['remove', '/api/guilds/:guildId/queue/remove'], ['move', '/api/guilds/:guildId/queue/move'], ['clear', '/api/guilds/:guildId/queue/clear'], ['skip', '/api/guilds/:guildId/skip'], ['pause', '/api/guilds/:guildId/pause'], ['resume', '/api/guilds/:guildId/resume'], ['stop', '/api/guilds/:guildId/stop'], ['leave', '/api/guilds/:guildId/leave'], ['volume', '/api/guilds/:guildId/volume'], ['instrumental', '/api/guilds/:guildId/instrumental']]) app.post(path, requireLogin, requireGuild, control(method));
 
 app.get(/.*/, (req, res) => res.sendFile(path.resolve(__dirname, '..', 'public', 'index.html')));
 
