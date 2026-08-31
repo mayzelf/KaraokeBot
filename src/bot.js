@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, Permission
 const config = require('./config');
 const { ensureGuild, getGuild, updateGuild } = require('./db');
 const { KaraokeManager } = require('./karaoke');
+const { isPlaylistUrl } = require('./media');
 const { createOAuthState } = require('./oauth');
 const { validateVolume } = require('./validation');
 
@@ -65,12 +66,19 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'play') {
       await interaction.deferReply();
       const voice = voiceChannel(interaction);
-      const tracks = await karaoke.add(interaction.guild, interaction.options.getString('song'), voice, voice, interaction.user.id);
+      const query = interaction.options.getString('song');
+      const wasPlaying = Boolean(karaoke.status(interaction.guildId).current);
+      const playlist = isPlaylistUrl(query);
+      const tracks = await karaoke.add(interaction.guild, query, voice, voice, interaction.user.id);
       const firstTrack = tracks[0];
       const lyricsMessage = tracks.length === 1
         ? (firstTrack.lyrics?.mode === 'synced' ? 'Synchronized lyrics found.' : firstTrack.lyrics?.mode === 'plain' ? 'Complete lyrics found; they will not be synchronized.' : 'No lyrics were found for this track.')
         : 'The playlist tracks were added in order.';
-      const summary = tracks.length === 1 ? `Added **${firstTrack.title}** to the queue.` : `Added **${tracks.length} tracks** to the queue.`;
+      const summary = playlist
+        ? `Added playlist with **${tracks.length} tracks** to the queue.`
+        : tracks.length === 1
+          ? `${wasPlaying ? 'Added' : 'Playing'} **${firstTrack.title}** ${wasPlaying ? 'to the queue.' : 'now.'}`
+          : `Added **${tracks.length} tracks** to the queue.`;
       return interaction.editReply({ content: `${summary} ${lyricsMessage}`, allowedMentions: noMentions });
     }
     if (command === 'join') {

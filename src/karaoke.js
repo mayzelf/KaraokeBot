@@ -120,7 +120,11 @@ class KaraokeManager {
 
   async add(guild, query, voiceChannel, textChannel, requesterId = null) {
     const session = await this.join(guild, voiceChannel, textChannel, requesterId);
-    const tracks = query && typeof query === 'object' && query.source === 'library' ? [query] : await resolveTracks(query);
+    const tracks = Array.isArray(query)
+      ? query
+      : query && typeof query === 'object' && query.source === 'library'
+        ? [query]
+        : await resolveTracks(query);
     // A single playlist URL can otherwise grow the queue without bound, which
     // both exhausts memory and puts entries beyond the reach of the queue
     // editing controls.

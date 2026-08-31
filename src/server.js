@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const fsp = fs.promises;
 const os = require('node:os');
@@ -8,7 +9,7 @@ const session = require('express-session');
 const helmet = require('helmet');
 const config = require('./config');
 const { client, karaoke, inviteUrl } = require('./bot');
-const { searchTracks } = require('./media');
+const { isPlaylistUrl, resolveTracks, searchTracks } = require('./media');
 const { listForGuild, removeFromGuild, saveUpload, trackForGuild } = require('./library');
 const { ensureGuild, getGuild, updateGuild, saveUser } = require('./db');
 const { SQLiteStore } = require('./session-store');
@@ -49,6 +50,14 @@ const apiLimiter = rateLimit(60 * 1000, 120);
 // budget than the read-only polling endpoints.
 const searchLimiter = rateLimit(60 * 1000, 20);
 const uploadLimiter = rateLimit(10 * 60 * 1000, 10);
+const playlistImports = new Map();
+const PLAYLIST_IMPORT_TTL_MS = 10 * 60 * 1000;
+const prunePlaylistImports = () => {
+  const cutoff = Date.now();
+  for (const [id, entry] of playlistImports) if (entry.expiresAt <= cutoff) playlistImports.delete(id);
+};
+const playlistImportCleanup = setInterval(prunePlaylistImports, PLAYLIST_IMPORT_TTL_MS);
+playlistImportCleanup.unref();
 app.use('/api', apiLimiter);
 
 // The session cookie is SameSite=Lax, which already keeps browsers from
@@ -200,6 +209,17 @@ app.get('/api/search', requireLogin, searchLimiter, async (req, res) => {
     res.json({ results });
   } catch (error) { fail(res, 400, error, 'That search could not be completed.'); }
 });
+app.post('/api/guilds/:guildId/playlist-preview', requireLogin, requireGuild, searchLimiter, async (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const query = validateSongQuery(body.song);
+    if (!isPlaylistUrl(query)) throw new Error('Enter a supported playlist URL to preview its tracks.');
+    const tracks = await resolveTracks(query);
+    const importId = randomUUID();
+    playlistImports.set(importId, { guildId: req.params.guildId, userId: req.session.user.id, tracks, expiresAt: Date.now() + PLAYLIST_IMPORT_TTL_MS });
+    res.json({ importId, tracks, count: tracks.length });
+  } catch (error) { fail(res, 400, error, 'That playlist could not be loaded.'); }
+});
 app.get('/api/guilds', requireLogin, (req, res) => res.json(discordGuilds(req).filter((guild) => canManage(req, guild.id)).map((guild) => ({ id: guild.id, name: guild.name, icon: guild.icon || null, iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null, accessLabel: guildAccess(guild).label, botPresent: Boolean(client.guilds.cache.get(guild.id)), libraryUploadsEnabled: config.libraryUploadsEnabled, settings: getGuild(guild.id) || ensureGuild(guild.id, guild.name) }))));
 app.get('/api/guilds/:guildId/status', requireLogin, requireGuild, (req, res, next) => {
   const body = (state) => res.json({ status: karaoke.status(req.params.guildId), inviteUrl: inviteUrl(req.params.guildId, state), botPresent: Boolean(client.guilds.cache.get(req.params.guildId)) });
@@ -314,8 +334,25 @@ function control(method) {
       const guild = client.guilds.cache.get(id);
       if (method === 'play') {
         const voice = await requesterVoiceMember(guild, req.session.user.id) || guild.members.me?.voice?.channel;
-        const query = body.libraryId !== undefined ? trackForGuild(id, body.libraryId) : validateSongQuery(body.song);
+        let importEntry = null;
+        let query;
+        if (body.importId !== undefined) {
+          if (typeof body.importId !== 'string' || !body.importId) throw new Error('That playlist preview has expired.');
+          importEntry = playlistImports.get(body.importId);
+          if (!importEntry || importEntry.expiresAt <= Date.now() || importEntry.guildId !== id || importEntry.userId !== req.session.user.id) {
+            if (importEntry?.expiresAt <= Date.now()) playlistImports.delete(body.importId);
+            throw new Error('That playlist preview has expired. Load the playlist again.');
+          }
+          const order = body.order === undefined ? importEntry.tracks.map((track, index) => index) : body.order;
+          if (!Array.isArray(order) || order.length !== importEntry.tracks.length || new Set(order).size !== order.length || order.some((index) => !Number.isInteger(index) || index < 0 || index >= importEntry.tracks.length)) {
+            throw new Error('The playlist order is invalid. Load the playlist again.');
+          }
+          query = order.map((index) => importEntry.tracks[index]);
+        } else {
+          query = body.libraryId !== undefined ? trackForGuild(id, body.libraryId) : validateSongQuery(body.song);
+        }
         const tracks = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id);
+        if (importEntry) playlistImports.delete(body.importId);
         return res.json({ tracks, count: tracks.length });
       }
       if (method === 'join') {

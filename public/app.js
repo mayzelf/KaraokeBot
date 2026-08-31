@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
+const state = { guilds: [], selected: null, selectedTrack: null, current: null, playlistImport: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -95,13 +95,16 @@ function renderGuilds() {
 async function selectGuild(guild) {
   state.selected = guild;
   const viewRequest = ++state.viewRequest;
+  state.selectedTrack = null;
+  state.current = null;
+  closePlaylistImport();
   $('#guilds').classList.add('hidden');
   const workspace = $('#workspace');
   workspace.classList.remove('hidden');
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE TRACKS</div><h3>Play a song or playlist</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video, playlist, or Spotify playlist URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video, playlist, or Spotify playlist URL"><button class="control control-accent" id="play"><span>Add track</span><span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat. Spotify playlist links import their track list and match songs to playable sources.</p><div id="notice" class="notice"></div>
         <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><span class="queue-hint">Drag to reorder</span><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue" role="list" aria-label="Up next queue"></div>
       </div>
@@ -128,7 +131,7 @@ async function selectGuild(guild) {
   const libraryUploadForm = $('#library-upload');
   libraryUploadForm.querySelectorAll('input, button').forEach((control) => { control.disabled = !libraryUploadEnabled; });
   if (!libraryUploadEnabled) $('#library-notice').textContent = 'Song uploads are disabled. Set LIBRARY_UPLOADS_ENABLED=true to enable them.';
-  $('#back').onclick = () => { state.viewRequest += 1; workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); clearTimeout(state.searchTimer); state.selectedTrack = null; };
+  $('#back').onclick = () => { state.viewRequest += 1; workspace.classList.add('hidden'); $('#guilds').classList.remove('hidden'); clearInterval(state.timer); clearTimeout(state.searchTimer); state.selectedTrack = null; state.current = null; closePlaylistImport(); };
   const settings = await api(`/api/guilds/${encodeURIComponent(guild.id)}/settings`);
   fillSettings(settings);
   await loadChannels(guild);
@@ -188,6 +191,143 @@ function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB'];
   const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
   return `${(value / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function isPlaylistInput(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be'].includes(host)) return url.searchParams.has('list');
+    if (host === 'open.spotify.com') return /^\/(?:embed\/)?playlist\/[A-Za-z0-9]{22}\/?$/i.test(url.pathname);
+    return ['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com'].includes(host) && /\/sets(?:\/|$)/i.test(url.pathname);
+  } catch { return false; }
+}
+
+function closePlaylistImport() {
+  document.querySelector('.playlist-modal-backdrop')?.remove();
+  state.playlistImport = null;
+}
+
+function renderPlaylistImportList(list, order) {
+  list.replaceChildren();
+  order.forEach((trackIndex, position) => {
+    const track = state.playlistImport.tracks[trackIndex];
+    const row = document.createElement('div');
+    row.className = 'playlist-import-track';
+    const number = document.createElement('span');
+    number.className = 'queue-number';
+    number.textContent = String(position + 1).padStart(2, '0');
+    const copy = document.createElement('div');
+    copy.className = 'queue-copy';
+    const title = document.createElement('strong');
+    title.textContent = track.title || 'Untitled track';
+    const meta = document.createElement('small');
+    meta.textContent = [track.artist, formatDuration(track.duration), track.provider].filter(Boolean).join(' · ') || 'Ready to add';
+    copy.append(title, meta);
+    row.append(number, copy);
+    list.append(row);
+  });
+}
+
+function shuffle(values) {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
+function openPlaylistImport(data, guild) {
+  closePlaylistImport();
+  const tracks = Array.isArray(data.tracks) ? data.tracks : [];
+  state.playlistImport = { importId: data.importId, tracks, order: tracks.map((track, index) => index) };
+
+  const backdrop = document.createElement('div');
+  backdrop.className = 'playlist-modal-backdrop';
+  const modal = document.createElement('section');
+  modal.className = 'playlist-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'playlist-modal-title');
+  const header = document.createElement('div');
+  header.className = 'playlist-modal-head';
+  const heading = document.createElement('div');
+  const kicker = document.createElement('div');
+  kicker.className = 'panel-kicker';
+  kicker.textContent = 'PLAYLIST IMPORT';
+  const title = document.createElement('h3');
+  title.id = 'playlist-modal-title';
+  title.textContent = `Ready to add ${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`;
+  heading.append(kicker, title);
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'playlist-modal-close';
+  close.setAttribute('aria-label', 'Close playlist import');
+  close.textContent = '×';
+  close.onclick = closePlaylistImport;
+  header.append(heading, close);
+  const intro = document.createElement('p');
+  intro.className = 'playlist-modal-intro';
+  intro.textContent = 'Review the songs before they join the queue. Shuffle the order whenever you like.';
+  const list = document.createElement('div');
+  list.className = 'playlist-import-list';
+  const actions = document.createElement('div');
+  actions.className = 'playlist-modal-actions';
+  const shuffleButton = document.createElement('button');
+  shuffleButton.type = 'button';
+  shuffleButton.className = 'control alt';
+  shuffleButton.textContent = 'Shuffle order';
+  shuffleButton.onclick = () => {
+    state.playlistImport.order = shuffle(state.playlistImport.order);
+    renderPlaylistImportList(list, state.playlistImport.order);
+  };
+  const addButton = document.createElement('button');
+  addButton.type = 'button';
+  addButton.className = 'control control-accent';
+  addButton.textContent = 'Add playlist';
+  addButton.onclick = async () => {
+    addButton.disabled = true;
+    shuffleButton.disabled = true;
+    try {
+      const result = await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ importId: state.playlistImport.importId, order: state.playlistImport.order }) });
+      closePlaylistImport();
+      const addedCount = Number(result.count) || tracks.length;
+      $('#notice').textContent = `Added playlist with ${addedCount} ${addedCount === 1 ? 'track' : 'tracks'} to the queue.`;
+      await refresh(guild);
+    } catch (error) {
+      $('#notice').textContent = error.message;
+      addButton.disabled = false;
+      shuffleButton.disabled = false;
+    }
+  };
+  actions.append(shuffleButton, addButton);
+  modal.append(header, intro, list, actions);
+  backdrop.append(modal);
+  backdrop.onclick = (event) => { if (event.target === backdrop) closePlaylistImport(); };
+  document.body.append(backdrop);
+  renderPlaylistImportList(list, state.playlistImport.order);
+  close.focus();
+}
+
+async function addSelection(guild) {
+  const rawValue = $('#song').value.trim();
+  const query = state.selectedTrack?.url || rawValue;
+  if (!query) return;
+  const button = $('#play');
+  button.disabled = true;
+  try {
+    if (isPlaylistInput(query)) {
+      $('#notice').textContent = 'Loading playlist tracks…';
+      const data = await api(`/api/guilds/${encodeURIComponent(guild.id)}/playlist-preview`, { method: 'POST', body: JSON.stringify({ song: query }) });
+      openPlaylistImport(data, guild);
+      $('#notice').textContent = '';
+    } else {
+      await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ song: query }) });
+      await refresh(guild);
+    }
+  } catch (error) { $('#notice').textContent = error.message; }
+  finally { updatePlayButton(); }
 }
 
 function renderLibrary(tracks, guild) {
@@ -555,7 +695,11 @@ function updateSearchProvider() {
 }
 function updatePlayButton() {
   const value = $('#song').value.trim();
+  const query = state.selectedTrack?.url || value;
+  const playlist = isPlaylistInput(query);
+  const label = playlist ? 'Add playlist' : state.current ? 'Add track' : 'Play track';
   $('#play').disabled = !state.selectedTrack && !/^https?:\/\//i.test(value);
+  $('#play').firstElementChild.textContent = label;
 }
 function bindSearch() {
   const input = $('#song');
@@ -592,7 +736,7 @@ function bindSearch() {
 function bindControls(guild) {
   const guildPath = (name) => `/api/guilds/${encodeURIComponent(guild.id)}/${name}`;
   const action = async (name, body = {}) => { try { await api(guildPath(name), { method: 'POST', body: JSON.stringify(body) }); refresh(guild, state.viewRequest); } catch (error) { $('#notice').textContent = error.message; } };
-  $('#play').onclick = () => { const query = state.selectedTrack?.url || $('#song').value.trim(); if (query) action('play', { song: query }); };
+  $('#play').onclick = () => addSelection(guild);
   $('#join').onclick = () => action('join', { channelId: $('#voice-channel').value || null });
   $('#resume').onclick = () => action('resume'); $('#pause').onclick = () => action('pause'); $('#skip').onclick = () => action('skip'); $('#stop').onclick = () => action('stop');
   $('#clear-queue').onclick = () => action('queue/clear');
@@ -632,6 +776,8 @@ async function refresh(guild, viewRequest = state.viewRequest) {
     if (viewRequest !== state.viewRequest || refreshRequest !== state.refreshRequest || state.selected !== guild) return;
     const status = $('#status');
     if (!status) return;
+    state.current = data.status.current || null;
+    updatePlayButton();
     status.textContent = data.botPresent ? (data.status.connected ? 'Live in voice' : 'Bot online') : 'Bot not installed';
     status.className = `status-pill${data.status.connected ? ' live' : ''}`;
     $('#resume').textContent = data.status.paused ? 'Resume' : 'Play';
