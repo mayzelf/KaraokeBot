@@ -34,6 +34,7 @@
     </section>
 
     <section id="app" class="hidden">
+      <div class="app-heading"><div><div class="eyebrow"><span class="eyebrow-dot"></span> <span id="app-kicker">CONTROL ROOM</span></div><h2 id="app-title">Your stages</h2></div><div class="app-heading-tools"><nav id="owner-view-switch" class="owner-view-switch hidden" aria-label="Owner views"><button id="owner-stages-tab" class="owner-view-tab active" type="button" aria-selected="true">My stages</button><button id="owner-overview-tab" class="owner-view-tab" type="button" aria-selected="false">Bot overview</button></nav><p class="muted" id="app-subtitle">Pick a server to start the show.</p></div></div>
       <section id="owner-dashboard" class="panel owner-dashboard hidden" aria-labelledby="owner-dashboard-title">
         <div class="panel-head"><div><div class="panel-kicker">BOT OWNER · PRIVATE</div><h3 id="owner-dashboard-title">Usage overview</h3></div><span class="panel-symbol">◌</span></div>
         <p class="settings-intro">A live view of the servers using your bot. Usage totals are kept in the local database; no message content or IP addresses are recorded.</p>
@@ -46,8 +47,8 @@
         <div id="owner-notice" class="notice"></div>
         <div class="owner-server-heading"><span>SERVERS WITH THE BOT</span><span>activity · usage</span></div>
         <div id="owner-server-list" class="owner-server-list"></div>
+        <div id="owner-pagination" class="owner-pagination hidden"><button class="control alt" id="owner-prev" type="button">← Previous</button><span id="owner-page-label">Page 1 of 1</span><button class="control alt" id="owner-next" type="button">Next →</button></div>
       </section>
-      <div class="app-heading"><div><div class="eyebrow"><span class="eyebrow-dot"></span> CONTROL ROOM</div><h2>Your stages</h2></div><p class="muted">Pick a server to start the show.</p></div>
       <div id="guilds" class="guild-grid"></div>
       <div id="workspace" class="hidden"></div>
     </section>

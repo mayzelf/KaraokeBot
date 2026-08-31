@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, current: null, playlistImport: null, searchProvider: 'youtube', timer: null, ownerTimer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
+const state = { guilds: [], selected: null, selectedTrack: null, ownerServers: [], ownerPage: 1, ownerPageSize: 10, ownerView: 'stages', playlistImport: null, searchProvider: 'youtube', timer: null, ownerTimer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -63,7 +63,9 @@ async function init() {
   state.guilds = await api('/api/guilds');
   renderGuilds();
   if (me.isBotOwner) {
-    $('#owner-dashboard').classList.remove('hidden');
+    $('#owner-view-switch').classList.remove('hidden');
+    $('#owner-stages-tab').onclick = () => setOwnerView('stages');
+    $('#owner-overview-tab').onclick = () => setOwnerView('overview');
     await loadOwnerDashboard();
     state.ownerTimer = setInterval(loadOwnerDashboard, 10_000);
   }
@@ -104,13 +106,22 @@ function ownerTime(value) {
   return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 function renderOwnerServers(servers) {
+  state.ownerServers = servers;
+  renderOwnerServerPage();
+}
+function renderOwnerServerPage() {
+  const servers = state.ownerServers;
   const container = $('#owner-server-list');
   container.replaceChildren();
   if (!servers.length) {
     container.innerHTML = '<div class="owner-empty">The bot is not currently installed in any server.</div>';
+    $('#owner-pagination').classList.add('hidden');
     return;
   }
-  for (const server of servers) {
+  const pageCount = Math.max(1, Math.ceil(servers.length / state.ownerPageSize));
+  state.ownerPage = Math.min(Math.max(1, state.ownerPage), pageCount);
+  const start = (state.ownerPage - 1) * state.ownerPageSize;
+  for (const server of servers.slice(start, start + state.ownerPageSize)) {
     const usage = server.usage || {};
     const card = document.createElement('article');
     card.className = `owner-server-card${server.active ? ' active' : ''}`;
@@ -124,6 +135,13 @@ function renderOwnerServers(servers) {
     card.innerHTML = `<div class="owner-server-main"><div class="owner-server-icon">${icon}</div><div class="owner-server-copy"><strong>${escapeHtml(server.name)}</strong><small>${status}</small><small>${nowPlaying}</small></div><span class="owner-live-dot" aria-label="${server.active ? 'Active' : 'Idle'}"></span></div><div class="owner-server-metrics"><div><span>USERS</span><strong>${ownerNumber(usage.uniqueUsers)}</strong><small>${ownerNumber(server.activeUsers)} in voice now</small></div><div><span>REQUESTS</span><strong>${ownerNumber(usage.totalRequests)}</strong><small>${ownerNumber(usage.apiRequests)} web · ${ownerNumber(usage.discordCommands)} Discord</small></div><div><span>SERVER</span><strong>${ownerNumber(server.memberCount)}</strong><small>members · ${ownerNumber(server.queueLength)} queued</small></div></div><div class="owner-server-foot"><span>Last used ${escapeHtml(ownerTime(usage.lastRequestAt))}</span><code>${escapeHtml(server.id)}</code></div>`;
     container.appendChild(card);
   }
+  const pagination = $('#owner-pagination');
+  pagination.classList.toggle('hidden', pageCount <= 1);
+  $('#owner-page-label').textContent = `Page ${state.ownerPage} of ${pageCount}`;
+  $('#owner-prev').disabled = state.ownerPage === 1;
+  $('#owner-next').disabled = state.ownerPage === pageCount;
+  $('#owner-prev').onclick = () => { if (state.ownerPage > 1) { state.ownerPage -= 1; renderOwnerServerPage(); } };
+  $('#owner-next').onclick = () => { if (state.ownerPage < pageCount) { state.ownerPage += 1; renderOwnerServerPage(); } };
 }
 async function loadOwnerDashboard() {
   try {
@@ -140,6 +158,28 @@ async function loadOwnerDashboard() {
   } catch (error) {
     $('#owner-notice').textContent = error.message;
   }
+}
+
+function setOwnerView(view) {
+  state.ownerView = view;
+  const overview = view === 'overview';
+  $('#owner-dashboard').classList.toggle('hidden', !overview);
+  $('#guilds').classList.toggle('hidden', overview);
+  $('#workspace').classList.add('hidden');
+  clearInterval(state.timer);
+  state.timer = null;
+  state.selected = null;
+  state.current = null;
+  state.viewRequest += 1;
+  closePlaylistImport();
+  $('#app-kicker').textContent = overview ? 'BOT OWNER · PRIVATE' : 'CONTROL ROOM';
+  $('#app-title').textContent = overview ? 'Bot overview' : 'Your stages';
+  $('#app-subtitle').textContent = overview ? 'All servers where the bot is installed.' : 'Pick a server to start the show.';
+  document.querySelectorAll('.owner-view-tab').forEach((button) => {
+    const active = button.id === (overview ? 'owner-overview-tab' : 'owner-stages-tab');
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
 }
 
 async function selectGuild(guild) {
