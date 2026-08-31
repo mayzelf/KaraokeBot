@@ -4,3 +4,4 @@ data/
 secrets/
 youtube-cookies.txt
 npm-debug.log*
+/test/

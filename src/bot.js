@@ -27,16 +27,16 @@ const COMMAND_SYNC_RETRY_MS = 5000;
 
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-async function registerCommands() {
+async function synchronizeCommands(route, scope, body = commands) {
   if (!config.clientId || !client.user) return;
   const rest = new REST({ version: '10' }).setToken(config.token);
   let lastError;
   for (let attempt = 1; attempt <= COMMAND_SYNC_ATTEMPTS; attempt += 1) {
     try {
-      // Bulk-overwrite the global command set so removed or changed commands
-      // are also pushed when the container is updated and restarted.
-      await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
-      console.log(`[discord] synchronized ${commands.length} global commands.`);
+      // Bulk-overwrite the command set so removed or changed commands are
+      // also pushed when the container is updated and restarted.
+      await rest.put(route, { body });
+      console.log(`[discord] synchronized ${body.length} ${scope} commands.`);
       return;
     } catch (error) {
       lastError = error;
@@ -49,6 +49,20 @@ async function registerCommands() {
   throw lastError;
 }
 
+async function registerGuildCommands(guildId) {
+  await synchronizeCommands(Routes.applicationGuildCommands(config.clientId, guildId), `guild ${guildId}`);
+}
+
+async function registerCommands() {
+  if (!config.clientId || !client.user) return;
+  // Guild commands propagate immediately. This bot's commands are all
+  // server-only, so use the guild scope as the authoritative command set.
+  for (const guild of client.guilds.cache.values()) await registerGuildCommands(guild.id);
+  // Remove the old global copy so Discord cannot serve a stale version of a
+  // command while the guild copy is already current.
+  await synchronizeCommands(Routes.applicationCommands(config.clientId), 'global', []);
+}
+
 function voiceChannel(interaction) { return interaction.member?.voice?.channel || null; }
 
 client.once('clientReady', async () => {
@@ -56,7 +70,10 @@ client.once('clientReady', async () => {
   for (const guild of client.guilds.cache.values()) ensureGuild(guild.id, guild.name);
   karaoke.updatePresence();
 });
-client.on('guildCreate', (guild) => ensureGuild(guild.id, guild.name));
+client.on('guildCreate', (guild) => {
+  ensureGuild(guild.id, guild.name);
+  registerGuildCommands(guild.id).catch((error) => console.error(`[discord] command synchronization failed for guild ${guild.id}:`, error.message));
+});
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
