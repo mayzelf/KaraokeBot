@@ -1,7 +1,7 @@
 const { spawn } = require('node:child_process');
 const config = require('./config');
 const { createLimiter, runCommand } = require('./proc');
-const { isSoundCloudUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateSongQuery } = require('./validation');
+const { isSoundCloudUrl, isSpotifyPlaylistUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateSongQuery } = require('./validation');
 // yt-dlp and ffmpeg are the only places where request data reaches an external
 // program. Bound how many can run at once so that a burst of authenticated
 // searches cannot exhaust the host's processes or memory.
@@ -50,6 +50,9 @@ if (YOUTUBE_COOKIES_CONFIGURED) {
 if (process.env.YTDLP_USER_AGENT?.trim()) {
   YTDLP_AUTH_ARGS.push('--user-agent', process.env.YTDLP_USER_AGENT.trim());
 }
+
+let spotifyToken = null;
+let spotifyTokenPromise = null;
 
 function ytDlpError(stderr, code) {
   const detail = String(stderr || '').split(/\r?\n/).map((line) => line.trim()).find((line) => /^ERROR:/i.test(line));
@@ -144,10 +147,131 @@ function isPlaylistUrl(value) {
   try {
     const url = new URL(value);
     if (isYouTubeUrl(value)) return url.searchParams.has('list');
+    if (isSpotifyPlaylistUrl(value)) return true;
     return isSoundCloudUrl(value) && /\/sets(?:\/|$)/i.test(url.pathname);
   } catch {
     return false;
   }
+}
+
+function spotifyPlaylistId(value) {
+  if (!isSpotifyPlaylistUrl(value)) return null;
+  const match = new URL(value).pathname.match(/\/(?:embed\/)?playlist\/([A-Za-z0-9]{22})/i);
+  return match?.[1] || null;
+}
+
+async function getSpotifyToken() {
+  if (!config.spotifyClientId || !config.spotifyClientSecret) {
+    throw new Error('Spotify playlist importing is not configured. Set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET.');
+  }
+  if (spotifyToken && spotifyToken.expiresAt > Date.now()) return spotifyToken.value;
+  if (spotifyTokenPromise) return spotifyTokenPromise;
+  spotifyTokenPromise = (async () => {
+    try {
+      const credentials = Buffer.from(`${config.spotifyClientId}:${config.spotifyClientSecret}`).toString('base64');
+      const response = await fetch('https://accounts.spotify.com/api/token', {
+        method: 'POST',
+        headers: { authorization: `Basic ${credentials}`, 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'grant_type=client_credentials',
+        signal: AbortSignal.timeout(10_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (typeof data.access_token !== 'string' || !data.access_token) throw new Error('Spotify did not return an access token.');
+      spotifyToken = { value: data.access_token, expiresAt: Date.now() + Math.max(60, Number(data.expires_in) || 3600) * 1000 - 60_000 };
+      return spotifyToken.value;
+    } catch (error) {
+      console.warn('[spotify] token request failed:', error.message);
+      throw new Error('Spotify could not be reached or rejected the configured application credentials.');
+    } finally {
+      spotifyTokenPromise = null;
+    }
+  })();
+  return spotifyTokenPromise;
+}
+
+async function spotifyRequest(path, retry = true) {
+  const token = await getSpotifyToken();
+  let response;
+  try {
+    response = await fetch(`https://api.spotify.com/v1${path}`, {
+      headers: { accept: 'application/json', authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(10_000)
+    });
+  } catch (error) {
+    console.warn('[spotify] playlist request failed:', error.message);
+    throw new Error('Spotify could not be reached while loading that playlist.');
+  }
+  if (response.status === 401 && retry) {
+    spotifyToken = null;
+    return spotifyRequest(path, false);
+  }
+  if (!response.ok) {
+    if (response.status === 403) throw new Error('Spotify did not allow access to that playlist. It may be private or unavailable to this application.');
+    if (response.status === 404) throw new Error('That Spotify playlist could not be found.');
+    console.warn(`[spotify] playlist request failed with HTTP ${response.status}`);
+    throw new Error('Spotify could not load that playlist.');
+  }
+  return response.json();
+}
+
+function spotifyTrack(item) {
+  const track = item?.item || item?.track;
+  if (!track || track.type !== 'track' || track.is_local || !track.id || !track.name) return null;
+  const artist = Array.isArray(track.artists) ? track.artists.map((value) => cleanMetadata(value?.name)).filter(Boolean).join(', ') : '';
+  return {
+    title: cleanMetadata(track.name, 'Untitled track'),
+    artist,
+    duration: Number(track.duration_ms || 0) / 1000,
+    search: `${artist ? `${artist} - ` : ''}${cleanMetadata(track.name)}`.slice(0, 300)
+  };
+}
+
+async function getSpotifyPlaylistTracks(query) {
+  const playlistId = spotifyPlaylistId(query);
+  if (!playlistId) throw new Error('Enter a valid Spotify playlist URL.');
+  const tracks = [];
+  let offset = 0;
+  while (tracks.length < config.queueMaxTracks) {
+    const limit = Math.min(50, config.queueMaxTracks - tracks.length);
+    const fields = encodeURIComponent('items(item(type,id,name,artists(name),duration_ms,is_local)),next,total');
+    const data = await spotifyRequest(`/playlists/${playlistId}/items?market=${encodeURIComponent(config.spotifyMarket)}&limit=${limit}&offset=${offset}&fields=${fields}`);
+    const items = Array.isArray(data.items) ? data.items : [];
+    tracks.push(...items.map(spotifyTrack).filter(Boolean));
+    if (!data.next || !items.length) break;
+    offset += items.length;
+  }
+  return tracks.slice(0, config.queueMaxTracks);
+}
+
+async function resolveSpotifyPlaylist(query) {
+  const spotifyTracks = await getSpotifyPlaylistTracks(query);
+  if (!spotifyTracks.length) throw new Error('That Spotify playlist is empty or contains no playable tracks.');
+  const resolved = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < spotifyTracks.length) {
+      const index = cursor++;
+      const item = spotifyTracks[index];
+      try {
+        const track = await resolveTrack(item.search);
+        // Keep Spotify's canonical metadata for the queue and lyrics lookup;
+        // the matched provider URL remains the actual playback source.
+        resolved[index] = {
+          ...track,
+          title: item.title,
+          artist: item.artist || track.artist,
+          duration: item.duration || track.duration
+        };
+      } catch (error) {
+        console.warn(`[spotify] could not match "${item.search}": ${error.message}`);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(config.mediaMaxConcurrency, spotifyTracks.length) }, worker));
+  const playable = resolved.filter(Boolean);
+  if (!playable.length) throw new Error('Spotify tracks were found, but none could be matched to a playable source.');
+  return playable;
 }
 
 async function pipedRequest(endpoint, params = {}, isUsable = () => true) {
@@ -308,6 +432,7 @@ async function resolveTrack(query) {
 
 async function resolveTracks(query) {
   const cleanQuery = validateSongQuery(query);
+  if (isSpotifyPlaylistUrl(cleanQuery)) return resolveSpotifyPlaylist(cleanQuery);
   if (isPlaylistUrl(cleanQuery)) return resolvePlaylist(cleanQuery);
   return [await resolveTrack(cleanQuery)];
 }
@@ -375,4 +500,4 @@ function createLibraryAudioStream(filePath, options = {}) {
   return stream;
 }
 
-module.exports = { createAudioStream, isPlaylistUrl, resolveTrack, resolveTracks, searchTracks };
+module.exports = { createAudioStream, isPlaylistUrl, resolveTrack, resolveTracks, searchTracks, spotifyPlaylistId };

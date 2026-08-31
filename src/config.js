@@ -49,6 +49,9 @@ const integer = (value, fallback, min, max) => {
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(parsed)));
 };
+const spotifyMarket = /^[A-Z]{2}$/.test(String(process.env.SPOTIFY_MARKET || 'US').trim().toUpperCase())
+  ? String(process.env.SPOTIFY_MARKET || 'US').trim().toUpperCase()
+  : 'US';
 
 module.exports = {
   token: process.env.DISCORD_TOKEN || '',
@@ -73,5 +76,8 @@ module.exports = {
   guildCacheMs: integer(process.env.GUILD_CACHE_MINUTES, 5, 1, 60) * 60 * 1000,
   queueMaxTracks: integer(process.env.QUEUE_MAX_TRACKS, 100, 1, 500),
   mediaTimeoutMs: integer(process.env.MEDIA_TIMEOUT_SECONDS, 45, 5, 300) * 1000,
-  mediaMaxConcurrency: integer(process.env.MEDIA_MAX_CONCURRENCY, 4, 1, 32)
+  mediaMaxConcurrency: integer(process.env.MEDIA_MAX_CONCURRENCY, 4, 1, 32),
+  spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
+  spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
+  spotifyMarket
 };

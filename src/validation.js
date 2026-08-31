@@ -4,6 +4,7 @@ const DISCORD_ID = /^\d{15,25}$/;
 const NON_HTTP_SCHEME = /^(?:file|data|javascript|vbscript|blob|jar|ftp|sftp|gopher|ws|wss|about|chrome|resource|php|expect|dict|tcp|rtmp|concat|subfile|crypto|pipe):/i;
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be']);
 const SOUNDCLOUD_HOSTS = new Set(['soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com']);
+const SPOTIFY_HOSTS = new Set(['open.spotify.com']);
 
 function isDiscordId(value) {
   return typeof value === 'string' && DISCORD_ID.test(value);
@@ -34,11 +35,13 @@ function validateSongQuery(value) {
   // search phrase, since a search phrase is handed to yt-dlp as a bare target.
   // Titles such as "Song: the remix" are still ordinary searches, so only a
   // real scheme (`scheme://`) or a known dangerous opaque one is refused.
-  if (NON_HTTP_SCHEME.test(query) || (/^[a-z][a-z0-9+.-]*:\/\//i.test(query) && !/^https?:\/\//i.test(query))) throw new Error('Only YouTube and SoundCloud URLs are supported.');
+  if (NON_HTTP_SCHEME.test(query) || (/^[a-z][a-z0-9+.-]*:\/\//i.test(query) && !/^https?:\/\//i.test(query))) throw new Error('Only YouTube, SoundCloud, or Spotify playlist URLs are supported.');
   if (/^https?:\/\//i.test(query)) {
     let url;
-    try { url = new URL(query); } catch { throw new Error('Enter a valid YouTube or SoundCloud URL.'); }
-    if (![...YOUTUBE_HOSTS, ...SOUNDCLOUD_HOSTS].includes(url.hostname.toLowerCase()) || !['http:', 'https:'].includes(url.protocol)) throw new Error('Only YouTube and SoundCloud URLs are supported.');
+    try { url = new URL(query); } catch { throw new Error('Enter a valid YouTube, SoundCloud, or Spotify playlist URL.'); }
+    const host = url.hostname.toLowerCase();
+    const supportedHost = [...YOUTUBE_HOSTS, ...SOUNDCLOUD_HOSTS].includes(host) || (SPOTIFY_HOSTS.has(host) && isSpotifyPlaylistUrl(query));
+    if (!supportedHost || !['http:', 'https:'].includes(url.protocol)) throw new Error('Only YouTube, SoundCloud, or Spotify playlist URLs are supported.');
   }
   return query;
 }
@@ -49,6 +52,13 @@ function isYouTubeUrl(value) {
 
 function isSoundCloudUrl(value) {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && SOUNDCLOUD_HOSTS.has(url.hostname.toLowerCase()); } catch { return false; }
+}
+
+function isSpotifyPlaylistUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && SPOTIFY_HOSTS.has(url.hostname.toLowerCase()) && /^\/(?:embed\/)?playlist\/[A-Za-z0-9]{22}\/?$/i.test(url.pathname);
+  } catch { return false; }
 }
 
 function validateVolume(value) {
@@ -81,4 +91,4 @@ function safeSoundCloudArtwork(value) {
   } catch { return null; }
 }
 
-module.exports = { isDiscordId, isSoundCloudUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume };
+module.exports = { isDiscordId, isSoundCloudUrl, isSpotifyPlaylistUrl, isYouTubeUrl, safeSoundCloudArtwork, safeYouTubeThumbnail, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume };

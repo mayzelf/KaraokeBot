@@ -101,9 +101,9 @@ async function selectGuild(guild) {
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE TRACKS</div><h3>Play a song or playlist</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video or playlist URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
-        <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat.</p><div id="notice" class="notice"></div>
-        <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue"></div>
+        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video, playlist, or Spotify playlist URL"><button class="control control-accent" id="play">Play track <span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+        <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat. Spotify playlist links import their track list and match songs to playable sources.</p><div id="notice" class="notice"></div>
+        <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><span class="queue-hint">Drag to reorder</span><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue" role="list" aria-label="Up next queue"></div>
       </div>
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">ROOM CONTROLS</div><h3>Playback</h3></div><span class="panel-symbol">♪</span></div>
         <div class="voice-select"><label for="voice-channel">Voice channel</label><select class="input" id="voice-channel"><option value="">Use my current channel</option></select></div>
@@ -273,7 +273,6 @@ function renderNowPlaying(current, paused, elapsed = 0) {
   const duration = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
   const rawCurrentTime = Number(elapsed || 0);
   const currentTime = Number.isFinite(rawCurrentTime) && rawCurrentTime > 0 ? rawCurrentTime : 0;
-  const progress = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
 
   const card = document.createElement('article');
   card.className = `now-playing-card${paused ? ' is-paused' : ''}`;
@@ -315,13 +314,11 @@ function renderNowPlaying(current, paused, elapsed = 0) {
 
   const progressTrack = document.createElement('div');
   progressTrack.className = 'now-playing-progress';
-  progressTrack.setAttribute('role', 'progressbar');
-  progressTrack.setAttribute('aria-label', `Playback progress for ${title}`);
-  progressTrack.setAttribute('aria-valuemin', '0');
-  progressTrack.setAttribute('aria-valuemax', String(duration || 0));
-  progressTrack.setAttribute('aria-valuenow', String(Math.max(0, currentTime)));
-  const progressBar = document.createElement('span');
-  progressBar.style.width = `${progress}%`;
+  const progressBar = document.createElement('progress');
+  progressBar.className = 'now-playing-progress-bar';
+  progressBar.max = duration || 1;
+  progressBar.value = Math.min(duration || 1, currentTime);
+  progressBar.setAttribute('aria-label', `Playback progress for ${title}`);
   progressTrack.append(progressBar);
 
   const time = document.createElement('div');
@@ -393,6 +390,7 @@ function renderQueue(queue, guild) {
   const container = $('#song-queue');
   const count = $('#queue-count');
   const tracks = Array.isArray(queue) ? queue : [];
+  if (state.queueDrag?.active) return;
   count.textContent = `${tracks.length} ${tracks.length === 1 ? 'track' : 'tracks'}`;
   $('#clear-queue').disabled = !tracks.length;
   container.replaceChildren();
@@ -406,6 +404,12 @@ function renderQueue(queue, guild) {
   tracks.forEach((track, index) => {
     const card = document.createElement('div');
     card.className = 'queue-card';
+    card.dataset.queueIndex = String(index);
+    card.draggable = true;
+    card.setAttribute('role', 'listitem');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-label', `${track.title || 'Untitled track'}, position ${index + 1}. Drag to reorder.`);
+    card.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
     const number = document.createElement('span');
     number.className = 'queue-number';
     number.textContent = String(index + 1).padStart(2, '0');
@@ -428,33 +432,71 @@ function renderQueue(queue, guild) {
         await refresh(guild);
       } catch (error) { $('#notice').textContent = error.message; remove.disabled = false; }
     };
-    const order = document.createElement('div');
-    order.className = 'queue-order';
-    const move = async (to) => {
-      order.querySelectorAll('button').forEach((button) => { button.disabled = true; });
+
+    const move = async (from, to, dragState = null) => {
+      if (from === to) return;
+      if (dragState) dragState.pending = true;
+      container.classList.add('is-reordering');
       try {
-        await api(`/api/guilds/${encodeURIComponent(guild.id)}/queue/move`, { method: 'POST', body: JSON.stringify({ from: index, to }) });
+        await api(`/api/guilds/${encodeURIComponent(guild.id)}/queue/move`, { method: 'POST', body: JSON.stringify({ from, to }) });
+        if (dragState && state.queueDrag === dragState) state.queueDrag = null;
         await refresh(guild);
-      } catch (error) { $('#notice').textContent = error.message; order.querySelectorAll('button').forEach((button) => { button.disabled = false; }); }
+      } catch (error) { $('#notice').textContent = error.message; }
+      finally {
+        container.classList.remove('is-reordering');
+        if (dragState && state.queueDrag === dragState) state.queueDrag = null;
+      }
     };
-    const up = document.createElement('button');
-    up.type = 'button';
-    up.className = 'queue-move';
-    up.textContent = '↑';
-    up.title = 'Move up';
-    up.setAttribute('aria-label', `Move ${track.title || 'track'} up`);
-    up.disabled = index === 0;
-    up.onclick = () => move(index - 1);
-    const down = document.createElement('button');
-    down.type = 'button';
-    down.className = 'queue-move';
-    down.textContent = '↓';
-    down.title = 'Move down';
-    down.setAttribute('aria-label', `Move ${track.title || 'track'} down`);
-    down.disabled = index === tracks.length - 1;
-    down.onclick = () => move(index + 1);
-    order.append(up, down);
-    card.append(number, copy, order, remove);
+
+    card.addEventListener('dragstart', (event) => {
+      if (event.target.closest('button')) {
+        event.preventDefault();
+        return;
+      }
+      const dragState = { active: true, card, index, pending: false };
+      state.queueDrag = dragState;
+      card.classList.add('is-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', String(index));
+    });
+    card.addEventListener('dragend', () => {
+      card.classList.remove('is-dragging');
+      container.querySelectorAll('.queue-card').forEach((node) => node.classList.remove('drop-before', 'drop-after'));
+      if (state.queueDrag?.card === card && !state.queueDrag.pending) state.queueDrag = null;
+    });
+    card.addEventListener('dragover', (event) => {
+      const dragState = state.queueDrag;
+      if (!dragState || dragState.card === card || dragState.pending) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      const before = event.clientY < card.getBoundingClientRect().top + card.offsetHeight / 2;
+      container.querySelectorAll('.queue-card').forEach((node) => node.classList.remove('drop-before', 'drop-after'));
+      card.classList.add(before ? 'drop-before' : 'drop-after');
+      dragState.target = card;
+      dragState.before = before;
+    });
+    card.addEventListener('dragleave', (event) => {
+      if (!card.contains(event.relatedTarget)) card.classList.remove('drop-before', 'drop-after');
+    });
+    card.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const dragState = state.queueDrag;
+      if (!dragState || dragState.card === card || dragState.pending) return;
+      const targetIndex = Number(card.dataset.queueIndex);
+      const sourceIndex = dragState.index;
+      const to = sourceIndex < targetIndex
+        ? targetIndex - (dragState.before ? 1 : 0)
+        : targetIndex + (dragState.before ? 0 : 1);
+      card.classList.remove('drop-before', 'drop-after');
+      move(sourceIndex, to, dragState);
+    });
+    card.addEventListener('keydown', (event) => {
+      if (!event.altKey || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault();
+      const to = event.key === 'ArrowUp' ? index - 1 : index + 1;
+      if (to >= 0 && to < tracks.length) move(index, to);
+    });
+    card.append(number, copy, remove);
     container.append(card);
   });
 }
@@ -509,7 +551,7 @@ function updateSearchProvider() {
     button.classList.toggle('active', active);
     button.setAttribute('aria-selected', String(active));
   });
-  $('#song').placeholder = isSoundCloud ? 'Search SoundCloud or paste a track or playlist URL' : 'Search YouTube or paste a video or playlist URL';
+  $('#song').placeholder = isSoundCloud ? 'Search SoundCloud or paste a track, playlist, or Spotify playlist URL' : 'Search YouTube or paste a video, playlist, or Spotify playlist URL';
 }
 function updatePlayButton() {
   const value = $('#song').value.trim();

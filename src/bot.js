@@ -9,7 +9,7 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 const karaoke = new KaraokeManager(client);
 const noMentions = { parse: [] };
 const commands = [
-  new SlashCommandBuilder().setName('play').setDescription('Play a song or playlist and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('Song search, video URL, or playlist URL').setMaxLength(300).setRequired(true)),
+  new SlashCommandBuilder().setName('play').setDescription('Play a song or playlist and show synchronized lyrics').addStringOption((o) => o.setName('song').setDescription('Song search, YouTube/SoundCloud URL, or Spotify playlist URL').setMaxLength(300).setRequired(true)),
   new SlashCommandBuilder().setName('join').setDescription('Join your current voice channel'),
   new SlashCommandBuilder().setName('leave').setDescription('Stop karaoke and leave the voice channel'),
   new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
@@ -21,10 +21,31 @@ const commands = [
   new SlashCommandBuilder().setName('instrumental').setDescription('Reduce the lead vocal so the room can sing it').addBooleanOption((o) => o.setName('on').setDescription('Leave empty to toggle'))
 ].map((command) => command.setDMPermission(false).toJSON());
 
+const COMMAND_SYNC_ATTEMPTS = 3;
+const COMMAND_SYNC_RETRY_MS = 5000;
+
+const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 async function registerCommands() {
   if (!config.clientId || !client.user) return;
   const rest = new REST({ version: '10' }).setToken(config.token);
-  await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
+  let lastError;
+  for (let attempt = 1; attempt <= COMMAND_SYNC_ATTEMPTS; attempt += 1) {
+    try {
+      // Bulk-overwrite the global command set so removed or changed commands
+      // are also pushed when the container is updated and restarted.
+      await rest.put(Routes.applicationCommands(config.clientId), { body: commands });
+      console.log(`[discord] synchronized ${commands.length} global commands.`);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < COMMAND_SYNC_ATTEMPTS) {
+        console.warn(`[discord] command synchronization attempt ${attempt} failed; retrying in ${COMMAND_SYNC_RETRY_MS / 1000}s:`, error.message);
+        await wait(COMMAND_SYNC_RETRY_MS);
+      }
+    }
+  }
+  throw lastError;
 }
 
 function voiceChannel(interaction) { return interaction.member?.voice?.channel || null; }
@@ -33,7 +54,6 @@ client.once('clientReady', async () => {
   console.log(`[discord] logged in as ${client.user.tag}`);
   for (const guild of client.guilds.cache.values()) ensureGuild(guild.id, guild.name);
   karaoke.updatePresence();
-  await registerCommands().catch((error) => console.error('[discord] command registration failed:', error.message));
 });
 client.on('guildCreate', (guild) => ensureGuild(guild.id, guild.name));
 
@@ -97,6 +117,9 @@ client.on('interactionCreate', async (interaction) => {
 async function startBot() {
   if (!config.token) return console.warn('[discord] DISCORD_TOKEN is missing; dashboard will still start.');
   await client.login(config.token);
+  // Keep Discord's global command definitions in sync on every process start,
+  // including deployments that only changed an option or description.
+  await registerCommands();
 }
 
 const inviteUrl = (guildId, state = createOAuthState()) => {
