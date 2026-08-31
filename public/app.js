@@ -1,5 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, current: null, playlistImport: null, searchProvider: 'youtube', timer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
+const state = { guilds: [], selected: null, selectedTrack: null, current: null, playlistImport: null, searchProvider: 'youtube', timer: null, ownerTimer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
 const themeKey = 'karaoke-theme';
 
 function readTheme() {
@@ -62,6 +62,11 @@ async function init() {
   $('#account').innerHTML = `<span class="account">${escapeHtml(me.user.global_name || me.user.username)} <a href="/auth/logout">Log out</a></span>`;
   state.guilds = await api('/api/guilds');
   renderGuilds();
+  if (me.isBotOwner) {
+    $('#owner-dashboard').classList.remove('hidden');
+    await loadOwnerDashboard();
+    state.ownerTimer = setInterval(loadOwnerDashboard, 10_000);
+  }
 }
 
 function renderGuilds() {
@@ -89,6 +94,51 @@ function renderGuilds() {
     node.querySelector('.guild-status').textContent = `${guild.accessLabel} · ${guild.botPresent ? 'Bot online' : 'Bot not installed'}`;
     node.querySelector('.guild-card').onclick = () => selectGuild(guild);
     container.appendChild(node);
+  }
+}
+
+function ownerNumber(value) { return new Intl.NumberFormat().format(Number(value || 0)); }
+function ownerTime(value) {
+  if (!value) return 'No activity yet';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+}
+function renderOwnerServers(servers) {
+  const container = $('#owner-server-list');
+  container.replaceChildren();
+  if (!servers.length) {
+    container.innerHTML = '<div class="owner-empty">The bot is not currently installed in any server.</div>';
+    return;
+  }
+  for (const server of servers) {
+    const usage = server.usage || {};
+    const card = document.createElement('article');
+    card.className = `owner-server-card${server.active ? ' active' : ''}`;
+    const icon = server.iconUrl
+      ? `<img src="${escapeHtml(server.iconUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      : '<span aria-hidden="true">♪</span>';
+    const status = server.active
+      ? `Active now${server.voiceChannelName ? ` · ${escapeHtml(server.voiceChannelName)}` : ''}`
+      : 'Bot online · idle';
+    const nowPlaying = server.currentTitle ? `Now playing: ${escapeHtml(server.currentTitle)}` : 'Nothing playing right now';
+    card.innerHTML = `<div class="owner-server-main"><div class="owner-server-icon">${icon}</div><div class="owner-server-copy"><strong>${escapeHtml(server.name)}</strong><small>${status}</small><small>${nowPlaying}</small></div><span class="owner-live-dot" aria-label="${server.active ? 'Active' : 'Idle'}"></span></div><div class="owner-server-metrics"><div><span>USERS</span><strong>${ownerNumber(usage.uniqueUsers)}</strong><small>${ownerNumber(server.activeUsers)} in voice now</small></div><div><span>REQUESTS</span><strong>${ownerNumber(usage.totalRequests)}</strong><small>${ownerNumber(usage.apiRequests)} web · ${ownerNumber(usage.discordCommands)} Discord</small></div><div><span>SERVER</span><strong>${ownerNumber(server.memberCount)}</strong><small>members · ${ownerNumber(server.queueLength)} queued</small></div></div><div class="owner-server-foot"><span>Last used ${escapeHtml(ownerTime(usage.lastRequestAt))}</span><code>${escapeHtml(server.id)}</code></div>`;
+    container.appendChild(card);
+  }
+}
+async function loadOwnerDashboard() {
+  try {
+    const data = await api('/api/owner/overview');
+    const summary = data.summary || {};
+    $('#owner-total-servers').textContent = ownerNumber(summary.totalServers);
+    $('#owner-active-servers').textContent = `${ownerNumber(summary.activeServers)} active right now`;
+    $('#owner-total-users').textContent = ownerNumber(summary.uniqueUsers);
+    $('#owner-total-requests').textContent = ownerNumber(summary.totalRequests);
+    $('#owner-request-breakdown').textContent = `${ownerNumber(summary.apiRequests)} web · ${ownerNumber(summary.discordCommands)} Discord`;
+    $('#owner-last-refresh').textContent = new Date(data.generatedAt || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    $('#owner-notice').textContent = '';
+    renderOwnerServers(data.servers || []);
+  } catch (error) {
+    $('#owner-notice').textContent = error.message;
   }
 }
 
@@ -701,7 +751,7 @@ function updatePlayButton() {
   $('#play').disabled = !state.selectedTrack && !/^https?:\/\//i.test(value);
   $('#play').firstElementChild.textContent = label;
 }
-function bindSearch() {
+function bindSearch(guild) {
   const input = $('#song');
   const scheduleSearch = () => {
     clearTimeout(state.searchTimer);
@@ -711,7 +761,7 @@ function bindSearch() {
     if (query.length < 2 || /^https?:\/\//i.test(query)) { $('#search-results').classList.add('hidden'); return; }
     state.searchTimer = setTimeout(async () => {
       try {
-        const data = await api(`/api/search?q=${encodeURIComponent(query)}&provider=${encodeURIComponent(provider)}`);
+        const data = await api(`/api/search?q=${encodeURIComponent(query)}&provider=${encodeURIComponent(provider)}&guildId=${encodeURIComponent(guild.id)}`);
         if (request === state.searchRequest && input.value.trim() === query && state.searchProvider === provider) renderSearchResults(data.results || []);
       } catch (error) {
         if (request === state.searchRequest) { $('#search-results').classList.add('hidden'); $('#notice').textContent = error.message; }
@@ -762,7 +812,7 @@ function bindControls(guild) {
     try { await api(guildPath('volume'), { method: 'POST', body: JSON.stringify({ volume: Number(roomVolume.value) }) }); }
     catch (error) { $('#notice').textContent = error.message; }
   };
-  bindSearch();
+  bindSearch(guild);
   bindLibrary(guild);
   $('#volume').oninput = () => { $('#volume-value').textContent = `${Math.round(Number($('#volume').value) * 100)}%`; };
   bindTagInput('voice'); bindTagInput('text'); bindTagInput('roles');

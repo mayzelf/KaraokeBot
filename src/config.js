@@ -52,6 +52,10 @@ const integer = (value, fallback, min, max) => {
 const spotifyMarket = /^[A-Z]{2}$/.test(String(process.env.SPOTIFY_MARKET || 'US').trim().toUpperCase())
   ? String(process.env.SPOTIFY_MARKET || 'US').trim().toUpperCase()
   : 'US';
+const botOwnerId = /^\d{15,25}$/.test(String(process.env.BOT_OWNER_ID || '').trim())
+  ? String(process.env.BOT_OWNER_ID).trim()
+  : '';
+if (process.env.BOT_OWNER_ID && !botOwnerId) console.warn('[config] BOT_OWNER_ID is not a valid Discord user ID. The owner dashboard will stay disabled.');
 
 module.exports = {
   token: process.env.DISCORD_TOKEN || '',
@@ -79,5 +83,6 @@ module.exports = {
   mediaMaxConcurrency: integer(process.env.MEDIA_MAX_CONCURRENCY, 4, 1, 32),
   spotifyClientId: process.env.SPOTIFY_CLIENT_ID || '',
   spotifyClientSecret: process.env.SPOTIFY_CLIENT_SECRET || '',
-  spotifyMarket
+  spotifyMarket,
+  botOwnerId
 };

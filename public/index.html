@@ -34,6 +34,19 @@
     </section>
 
     <section id="app" class="hidden">
+      <section id="owner-dashboard" class="panel owner-dashboard hidden" aria-labelledby="owner-dashboard-title">
+        <div class="panel-head"><div><div class="panel-kicker">BOT OWNER · PRIVATE</div><h3 id="owner-dashboard-title">Usage overview</h3></div><span class="panel-symbol">◌</span></div>
+        <p class="settings-intro">A live view of the servers using your bot. Usage totals are kept in the local database; no message content or IP addresses are recorded.</p>
+        <div class="owner-summary-grid">
+          <div class="owner-stat"><span>Servers</span><strong id="owner-total-servers">—</strong><small id="owner-active-servers">—</small></div>
+          <div class="owner-stat"><span>People using it</span><strong id="owner-total-users">—</strong><small>unique tracked users</small></div>
+          <div class="owner-stat"><span>Total requests</span><strong id="owner-total-requests">—</strong><small id="owner-request-breakdown">—</small></div>
+          <div class="owner-stat"><span>Last refresh</span><strong id="owner-last-refresh">—</strong><small>auto-refreshes every 10 seconds</small></div>
+        </div>
+        <div id="owner-notice" class="notice"></div>
+        <div class="owner-server-heading"><span>SERVERS WITH THE BOT</span><span>activity · usage</span></div>
+        <div id="owner-server-list" class="owner-server-list"></div>
+      </section>
       <div class="app-heading"><div><div class="eyebrow"><span class="eyebrow-dot"></span> CONTROL ROOM</div><h2>Your stages</h2></div><p class="muted">Pick a server to start the show.</p></div>
       <div id="guilds" class="guild-grid"></div>
       <div id="workspace" class="hidden"></div>

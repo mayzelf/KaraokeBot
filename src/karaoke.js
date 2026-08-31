@@ -314,7 +314,9 @@ class KaraokeManager {
       queue: session.queue, paused: session.player.state.status === AudioPlayerStatus.Paused,
       elapsed: this.elapsed(session),
       volume: session.volume ?? settings?.default_volume ?? 0.8,
-      instrumental: Boolean(settings?.instrumental)
+      instrumental: Boolean(settings?.instrumental),
+      voiceChannelId: session.voiceChannelId,
+      active: Boolean(session.connection || session.current)
     };
   }
 

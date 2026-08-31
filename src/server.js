@@ -11,7 +11,8 @@ const config = require('./config');
 const { client, karaoke, inviteUrl } = require('./bot');
 const { isPlaylistUrl, resolveTracks, searchTracks } = require('./media');
 const { listForGuild, removeFromGuild, saveUpload, trackForGuild } = require('./library');
-const { ensureGuild, getGuild, updateGuild, saveUser } = require('./db');
+const { ensureGuild, getGuild, updateGuild, saveUser, usageForGuilds } = require('./db');
+const { recordUsage, recordWebRequest } = require('./usage');
 const { SQLiteStore } = require('./session-store');
 const { createOAuthState, validOAuthState } = require('./oauth');
 const { isDiscordId, validateDiscordIdList, validateOptionalDiscordId, validateQueueIndex, validateSongQuery, validateVolume } = require('./validation');
@@ -133,9 +134,12 @@ async function ensureFreshGuilds(req, res, next) {
   next();
 }
 app.use('/api', ensureFreshGuilds);
+app.use('/api', (req, res, next) => { recordWebRequest(req, (guildId) => canManage(req, guildId)); next(); });
 
 const redirect = (res, path) => res.redirect(`${path}${path.includes('?') ? '&' : '?'}v=${Date.now()}`);
 function requireLogin(req, res, next) { if (!req.session.user) return res.status(401).json({ error: 'Login required.' }); next(); }
+function isBotOwner(req) { return Boolean(config.botOwnerId && req.session.user?.id === config.botOwnerId); }
+function requireBotOwner(req, res, next) { if (!isBotOwner(req)) return res.status(403).json({ error: 'Bot owner access required.' }); next(); }
 function discordGuilds(req) { return req.session.guilds || []; }
 function guildAccess(guild) {
   if (!guild) return { allowed: false, label: '' };
@@ -201,10 +205,40 @@ app.get('/auth/logout', logout);
 // Discord user payload.
 app.get('/api/me', (req, res) => {
   const user = req.session.user;
-  res.json({ user: user ? { id: user.id, username: user.username || '', global_name: user.global_name || null, avatar: user.avatar || null } : null });
+  res.json({ user: user ? { id: user.id, username: user.username || '', global_name: user.global_name || null, avatar: user.avatar || null } : null, isBotOwner: isBotOwner(req) });
+});
+app.get('/api/owner/overview', requireLogin, requireBotOwner, (req, res) => {
+  const guilds = [...client.guilds.cache.values()];
+  const usage = usageForGuilds(guilds.map((guild) => guild.id));
+  const servers = guilds.map((guild) => {
+    const status = karaoke.status(guild.id);
+    const voiceChannel = status.voiceChannelId ? guild.channels.cache.get(status.voiceChannelId) : null;
+    const activeUsers = voiceChannel?.members
+      ? [...voiceChannel.members.values()].filter((member) => !member.user.bot).length
+      : 0;
+    const guildUsage = usage.byGuild.get(guild.id) || { totalRequests: 0, apiRequests: 0, discordCommands: 0, uniqueUsers: 0, lastRequestAt: null };
+    return {
+      id: guild.id,
+      name: guild.name,
+      iconUrl: guild.icon ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}?size=128` : null,
+      memberCount: guild.memberCount || guild.members.cache.size || 0,
+      active: Boolean(status.connected || status.current),
+      activeUsers,
+      voiceChannelName: voiceChannel?.name || null,
+      currentTitle: status.current?.title || null,
+      queueLength: status.queue.length,
+      usage: guildUsage
+    };
+  }).sort((a, b) => b.usage.totalRequests - a.usage.totalRequests || a.name.localeCompare(b.name));
+  res.json({
+    generatedAt: new Date().toISOString(),
+    summary: { totalServers: servers.length, activeServers: servers.filter((guild) => guild.active).length, ...usage.totals },
+    servers
+  });
 });
 app.get('/api/search', requireLogin, searchLimiter, async (req, res) => {
   try {
+    if (isDiscordId(req.query.guildId) && canManage(req, req.query.guildId)) recordUsage({ guildId: req.query.guildId, userId: req.session.user.id, source: 'api' });
     const results = await searchTracks(req.query.q, typeof req.query.provider === 'string' ? req.query.provider : 'youtube');
     res.json({ results });
   } catch (error) { fail(res, 400, error, 'That search could not be completed.'); }

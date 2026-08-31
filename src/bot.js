@@ -1,6 +1,7 @@
 const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
 const config = require('./config');
 const { ensureGuild, getGuild, updateGuild } = require('./db');
+const { recordUsage } = require('./usage');
 const { KaraokeManager } = require('./karaoke');
 const { isPlaylistUrl } = require('./media');
 const { createOAuthState } = require('./oauth');
@@ -77,6 +78,7 @@ client.on('guildCreate', (guild) => {
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
+  recordUsage({ guildId: interaction.guildId, userId: interaction.user?.id, source: 'discord' });
   try {
     if (!karaoke.isAllowed(interaction.guildId, interaction)) return interaction.reply({ content: 'You are not allowed to control karaoke here.', ephemeral: true });
     const command = interaction.commandName;
