@@ -46,6 +46,15 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]));
 }
 
+function safeSourceUrl(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const allowedHost = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be', 'soundcloud.com', 'www.soundcloud.com', 'm.soundcloud.com'].includes(host);
+    return ['http:', 'https:'].includes(url.protocol) && allowedHost ? url.toString() : null;
+  } catch { return null; }
+}
+
 function safeInviteUrl(value) {
   try {
     const url = new URL(value);
@@ -541,6 +550,18 @@ function renderNowPlaying(current, paused, elapsed = 0) {
   artist.className = 'now-playing-artist';
   artist.textContent = current.artist || 'Unknown artist';
   copy.append(eyebrow, heading, artist);
+
+  const sourceUrl = safeSourceUrl(current.url);
+  if (sourceUrl) {
+    const sourceLink = document.createElement('a');
+    sourceLink.className = 'now-playing-source';
+    sourceLink.href = sourceUrl;
+    sourceLink.target = '_blank';
+    sourceLink.rel = 'noopener noreferrer';
+    sourceLink.textContent = 'Open original source ↗';
+    sourceLink.setAttribute('aria-label', `Open original source for ${title}`);
+    copy.append(sourceLink);
+  }
 
   const progressTrack = document.createElement('div');
   progressTrack.className = 'now-playing-progress';

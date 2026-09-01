@@ -67,6 +67,7 @@ class KaraokeManager {
       textChannel: null, lyricMessage: null, lyricTimer: null, stream: null,
       startedAt: 0, pausedAt: 0, pausedTotal: 0, lastLine: null, voiceChannelId: null,
       lastCompleted: null, nextPromise: null, onPlaying: null, playbackToken: 0,
+      connectionStateListener: null,
       // `volume` is null until someone sets one for this session; the guild
       // default applies until then. `resource` is kept so the gain can be
       // changed while a track is playing instead of only at track start.
@@ -103,19 +104,73 @@ class KaraokeManager {
   async join(guild, voiceChannel, textChannel, requesterId = null) {
     const session = this.session(guild.id);
     if (!voiceChannel?.joinable || !voiceChannel?.speakable) throw new Error('I cannot join or speak in that voice channel. Check my Discord permissions.');
+    // A voice connection can remain as a stale object after Discord removes
+    // the bot. Reconcile that state before enforcing the one-room lock.
+    const connectionStatus = session.connection?.state?.status;
+    const botVoiceChannelId = guild.members.me?.voice?.channelId || null;
+    if (connectionStatus === VoiceConnectionStatus.Destroyed
+      || connectionStatus === VoiceConnectionStatus.Disconnected
+      || (session.voiceChannelId && guild.members.me?.voice && !botVoiceChannelId
+        && connectionStatus !== VoiceConnectionStatus.Connecting
+        && connectionStatus !== VoiceConnectionStatus.Signalling)) {
+      this.stop(guild.id);
+    }
     // A guild session owns one voice room at a time. Record the room explicitly
     // so a second requester cannot move an active performance away from the
     // singers who started it without first stopping the session.
     const activeChannelId = session.voiceChannelId || guild.members.me?.voice?.channelId || null;
     if (activeChannelId && activeChannelId !== voiceChannel.id) throw new Error('I am already active in another voice channel. Use /leave there before moving me.');
-    session.connection = joinVoiceChannel({ channelId: voiceChannel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false });
-    await entersState(session.connection, VoiceConnectionStatus.Ready, 15_000);
-    session.connection.subscribe(session.player);
+    const connection = joinVoiceChannel({ channelId: voiceChannel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: false });
+    session.connection = connection;
+    session.connectionStateListener = (_, state) => {
+      if (session.connection !== connection || state.status !== VoiceConnectionStatus.Destroyed) return;
+      // The connection is gone without going through stop()/leave(). Clear
+      // the whole session so a later join cannot be blocked by old state.
+      session.connection = null;
+      session.connectionStateListener = null;
+      session.voiceChannelId = null;
+      this.stop(guild.id);
+    };
+    connection.on('stateChange', session.connectionStateListener);
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+    } catch (error) {
+      if (session.connection === connection) {
+        connection.off('stateChange', session.connectionStateListener);
+        session.connectionStateListener = null;
+        session.connection = null;
+        session.voiceChannelId = null;
+        connection.destroy();
+      }
+      throw error;
+    }
+    connection.subscribe(session.player);
     session.voiceChannelId = voiceChannel.id;
     // Discord exposes a built-in text chat on every voice channel. VoiceChannel
     // supports .send(), so lyrics stay with the people singing automatically.
     session.textChannel = textChannel || voiceChannel || session.textChannel;
     return session;
+  }
+
+  handleVoiceStateUpdate(oldState, newState) {
+    if (!newState?.guild || newState.id !== this.client.user?.id) return;
+    const session = this.sessions.get(newState.guild.id);
+    if (!session?.connection) return;
+
+    if (!newState.channelId) {
+      // Ignore a transient empty state while a new connection is negotiating.
+      // Once connected, an empty bot voice state means the session is gone.
+      const status = session.connection.state?.status;
+      if (status === VoiceConnectionStatus.Connecting || status === VoiceConnectionStatus.Signalling) return;
+      this.stop(newState.guild.id);
+      return;
+    }
+
+    // Keep the lock aligned with Discord if an administrator moves the bot
+    // outside the karaoke commands. This also repairs a stale cached ID.
+    session.voiceChannelId = newState.channelId;
+    const channel = newState.guild.channels.cache.get(newState.channelId);
+    if (channel?.isVoiceBased?.()) session.textChannel = channel;
   }
 
   async add(guild, query, voiceChannel, textChannel, requesterId = null) {
@@ -409,9 +464,12 @@ class KaraokeManager {
     session.volume = null;
     if (session.lyricTimer) clearInterval(session.lyricTimer);
     session.lyricTimer = null;
-    if (session.connection) session.connection.destroy();
+    const connection = session.connection;
+    if (connection && session.connectionStateListener) connection.off('stateChange', session.connectionStateListener);
+    session.connectionStateListener = null;
     session.connection = null;
     session.voiceChannelId = null;
+    if (connection) connection.destroy();
     session.current = null;
     session.lastCompleted = null;
     session.lyricMessage = null;

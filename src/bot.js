@@ -75,6 +75,7 @@ client.on('guildCreate', (guild) => {
   ensureGuild(guild.id, guild.name);
   registerGuildCommands(guild.id).catch((error) => console.error(`[discord] command synchronization failed for guild ${guild.id}:`, error.message));
 });
+client.on('voiceStateUpdate', (oldState, newState) => karaoke.handleVoiceStateUpdate(oldState, newState));
 
 client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;

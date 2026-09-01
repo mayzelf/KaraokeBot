@@ -415,10 +415,21 @@ async function resolveTrack(query) {
     }
   }
   let youtubeError;
-  try { return await resolveWithYtDlp(`ytsearch1:${cleanQuery}`, cleanQuery, 'youtube'); }
-  catch (error) { youtubeError = error; }
+  try {
+    // Resolve the first flat search result to its real source URL before it
+    // enters the queue. Passing `ytsearch1:` directly to the single-item
+    // resolver can make yt-dlp return the search expression as metadata rather
+    // than the video that should actually be played.
+    const results = await searchYouTube(cleanQuery);
+    if (!results[0]) throw new Error('No YouTube results were found.');
+    return await resolveWithYtDlp(results[0].url, results[0].title || cleanQuery, 'youtube');
+  } catch (error) { youtubeError = error; }
   if (YOUTUBE_COOKIES_CONFIGURED) throw youtubeError;
-  try { return await resolveWithYtDlp(`scsearch1:${cleanQuery}`, cleanQuery, 'soundcloud'); }
+  try {
+    const results = await searchSoundCloud(cleanQuery);
+    if (!results[0]) throw new Error('No SoundCloud results were found.');
+    return await resolveWithYtDlp(results[0].url, results[0].title || cleanQuery, 'soundcloud');
+  }
   catch (soundCloudError) {
     if (config.pipedApiUrls.length) {
       try {
