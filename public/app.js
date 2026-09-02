@@ -1,6 +1,7 @@
 const $ = (selector) => document.querySelector(selector);
-const state = { guilds: [], selected: null, selectedTrack: null, ownerServers: [], ownerPage: 1, ownerPageSize: 10, ownerView: 'stages', playlistImport: null, searchProvider: 'youtube', timer: null, ownerTimer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false };
+const state = { guilds: [], selected: null, selectedTrack: null, ownerServers: [], ownerPage: 1, ownerPageSize: 10, ownerView: 'stages', playlistImport: null, searchProvider: 'youtube', timer: null, ownerTimer: null, searchTimer: null, searchRequest: 0, viewRequest: 0, refreshRequest: 0, instrumental: false, queueAtFront: false };
 const themeKey = 'karaoke-theme';
+const queuePlacementKey = 'karaoke-queue-placement';
 
 function readTheme() {
   try { return localStorage.getItem(themeKey) === 'dark' ? 'dark' : 'light'; } catch { return 'light'; }
@@ -203,7 +204,7 @@ async function selectGuild(guild) {
   workspace.innerHTML = `<div class="workspace-top"><div class="workspace-nav"><button class="back" id="back">← All stages</button><span class="workspace-divider">/</span><strong class="workspace-server" id="workspace-server-name"></strong></div><span class="status-pill" id="status">Loading…</span></div>
     <div class="workspace-grid">
       <div class="panel"><div class="panel-head"><div><div class="panel-kicker">QUEUE TRACKS</div><h3>Play a song or playlist</h3></div><span class="panel-symbol">⌁</span></div>
-        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video, playlist, or Spotify playlist URL"><button class="control control-accent" id="play"><span>Add track</span><span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
+        <div class="provider-tabs" role="tablist" aria-label="Search provider"><button class="provider-tab active" id="provider-youtube" type="button" role="tab" aria-selected="true">YouTube</button><button class="provider-tab" id="provider-soundcloud" type="button" role="tab" aria-selected="false">SoundCloud</button></div><div class="search-row"><input class="input" id="song" maxlength="300" autocomplete="off" placeholder="Search YouTube or paste a video, playlist, or Spotify playlist URL"><button class="queue-placement-toggle" id="queue-placement" type="button" aria-pressed="false" aria-label="Add new tracks to the end of the queue" title="Add new tracks to the end of the queue"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h14"></path><path d="M12 20V8"></path><path d="m8 12 4-4 4 4"></path></svg></button><button class="control control-accent" id="play"><span>Add track</span><span>↗</span></button></div><div id="search-results" class="search-results hidden"></div>
         <p class="help">The bot joins your current voice channel and posts live lyrics in its built-in chat. Spotify playlist links import their track list and match songs to playable sources.</p><div id="notice" class="notice"></div>
         <div class="queue-heading"><div><span>UP NEXT</span><span id="queue-count">0 tracks</span></div><span class="queue-hint">Drag to reorder</span><button class="queue-clear" id="clear-queue" type="button">Clear queue</button></div><div id="song-queue" class="song-queue" role="list" aria-label="Up next queue"></div>
       </div>
@@ -307,6 +308,25 @@ function closePlaylistImport() {
   state.playlistImport = null;
 }
 
+function readQueuePlacement() {
+  try { return localStorage.getItem(queuePlacementKey) === 'front'; } catch { return false; }
+}
+
+function writeQueuePlacement(value) {
+  try { localStorage.setItem(queuePlacementKey, value ? 'front' : 'end'); } catch {}
+}
+
+function updateQueuePlacementToggle() {
+  const button = $('#queue-placement');
+  if (!button) return;
+  const atFront = Boolean(state.queueAtFront);
+  button.classList.toggle('is-active', atFront);
+  button.setAttribute('aria-pressed', String(atFront));
+  const label = atFront ? 'Add new tracks next' : 'Add new tracks to the end of the queue';
+  button.setAttribute('aria-label', label);
+  button.title = label;
+}
+
 function renderPlaylistImportList(list, order) {
   list.replaceChildren();
   order.forEach((trackIndex, position) => {
@@ -368,7 +388,7 @@ function openPlaylistImport(data, guild) {
   header.append(heading, close);
   const intro = document.createElement('p');
   intro.className = 'playlist-modal-intro';
-  intro.textContent = 'Review the songs before they join the queue. Shuffle the order whenever you like.';
+  intro.textContent = `Review the songs before they join the ${state.queueAtFront ? 'front of the queue' : 'queue'}. Shuffle the order whenever you like.`;
   const list = document.createElement('div');
   list.className = 'playlist-import-list';
   const actions = document.createElement('div');
@@ -389,10 +409,10 @@ function openPlaylistImport(data, guild) {
     addButton.disabled = true;
     shuffleButton.disabled = true;
     try {
-      const result = await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ importId: state.playlistImport.importId, order: state.playlistImport.order }) });
+      const result = await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ importId: state.playlistImport.importId, order: state.playlistImport.order, queuePlacement: state.queueAtFront ? 'front' : 'end' }) });
       closePlaylistImport();
       const addedCount = Number(result.count) || tracks.length;
-      $('#notice').textContent = `Added playlist with ${addedCount} ${addedCount === 1 ? 'track' : 'tracks'} to the queue.`;
+      $('#notice').textContent = `Added playlist with ${addedCount} ${addedCount === 1 ? 'track' : 'tracks'} ${state.queueAtFront ? 'next' : 'to the queue'}.`;
       await refresh(guild);
     } catch (error) {
       $('#notice').textContent = error.message;
@@ -422,7 +442,7 @@ async function addSelection(guild) {
       openPlaylistImport(data, guild);
       $('#notice').textContent = '';
     } else {
-      await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ song: query }) });
+      await api(`/api/guilds/${encodeURIComponent(guild.id)}/play`, { method: 'POST', body: JSON.stringify({ song: query, queuePlacement: state.queueAtFront ? 'front' : 'end' }) });
       await refresh(guild);
     }
   } catch (error) { $('#notice').textContent = error.message; }
@@ -814,6 +834,8 @@ function updatePlayButton() {
 }
 function bindSearch(guild) {
   const input = $('#song');
+  state.queueAtFront = readQueuePlacement();
+  updateQueuePlacementToggle();
   const scheduleSearch = () => {
     clearTimeout(state.searchTimer);
     const request = ++state.searchRequest;
@@ -840,6 +862,11 @@ function bindSearch(guild) {
   });
   $('#provider-youtube').onclick = () => { state.searchProvider = 'youtube'; state.selectedTrack = null; updateSearchProvider(); updatePlayButton(); scheduleSearch(); };
   $('#provider-soundcloud').onclick = () => { state.searchProvider = 'soundcloud'; state.selectedTrack = null; updateSearchProvider(); updatePlayButton(); scheduleSearch(); };
+  $('#queue-placement').onclick = () => {
+    state.queueAtFront = !state.queueAtFront;
+    writeQueuePlacement(state.queueAtFront);
+    updateQueuePlacementToggle();
+  };
   updateSearchProvider();
   updatePlayButton();
 }

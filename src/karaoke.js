@@ -173,7 +173,7 @@ class KaraokeManager {
     if (channel?.isVoiceBased?.()) session.textChannel = channel;
   }
 
-  async add(guild, query, voiceChannel, textChannel, requesterId = null) {
+  async add(guild, query, voiceChannel, textChannel, requesterId = null, queuePlacement = 'end') {
     const session = await this.join(guild, voiceChannel, textChannel, requesterId);
     const tracks = Array.isArray(query)
       ? query
@@ -187,7 +187,8 @@ class KaraokeManager {
     if (room <= 0) throw new Error(`The queue is full (${config.queueMaxTracks} tracks). Remove a track before adding more.`);
     if (tracks.length > room) tracks.length = room;
     tracks.forEach((track) => { track.requestedBy = requesterId; });
-    session.queue.push(...tracks);
+    if (queuePlacement === 'front') session.queue.unshift(...tracks);
+    else session.queue.push(...tracks);
     if (!session.current) await this.next(guild.id);
     return tracks;
   }

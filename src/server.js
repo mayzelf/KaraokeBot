@@ -385,7 +385,8 @@ function control(method) {
         } else {
           query = body.libraryId !== undefined ? trackForGuild(id, body.libraryId) : validateSongQuery(body.song);
         }
-        const tracks = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id);
+        const queuePlacement = body.queuePlacement === 'front' ? 'front' : 'end';
+        const tracks = await karaoke.add(guild, query, voice, voice || defaultTextChannel(guild), req.session.user.id, queuePlacement);
         if (importEntry) playlistImports.delete(body.importId);
         return res.json({ tracks, count: tracks.length });
       }
