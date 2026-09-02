@@ -71,11 +71,11 @@
 @media(max-width:520px){.playlist-modal-backdrop{padding:12px}.playlist-modal{padding:19px;border-radius:18px;max-height:calc(100vh - 24px)}.playlist-modal-actions{flex-direction:column-reverse}.playlist-modal-actions .control{width:100%}}
 /* Compact queue-placement control beside the add action. */
 .search-row .input{flex:1 1 auto}
-.queue-placement-toggle{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;padding:0;border:1px solid transparent;border-radius:10px;background:transparent;color:var(--muted);cursor:pointer;transition:background .18s,border-color .18s,color .18s,transform .18s}
-.queue-placement-toggle svg{width:17px;height:17px}
-.queue-placement-toggle:hover{background:#f0edf5;border-color:#e1d9ed;color:var(--ink);transform:translateY(-1px)}
-.queue-placement-toggle.is-active{background:#f0eaff;border-color:#d8c8f3;color:var(--purple)}
-.queue-placement-toggle:focus-visible{outline:none;border-color:#a482e5;box-shadow:0 0 0 4px #7044db12}
-[data-theme=dark] .queue-placement-toggle:hover{background:#332b3c;border-color:#4a3e52;color:var(--ink)}
-[data-theme=dark] .queue-placement-toggle.is-active{background:#34294b;border-color:#59467d;color:var(--purple)}
+.queue-placement-toggle{display:grid;place-items:center;flex:0 0 auto;width:34px;height:34px;padding:0;border:0;border-radius:0;background:transparent;color:var(--muted);cursor:pointer}
+.queue-placement-toggle svg{width:17px;height:17px;transition:color .18s ease}
+.queue-placement-toggle:hover{background:transparent;color:var(--ink)}
+.queue-placement-toggle.is-active{background:transparent;color:var(--purple)}
+.queue-placement-toggle:focus-visible{outline:2px solid currentColor;outline-offset:3px;box-shadow:none}
+[data-theme=dark] .queue-placement-toggle:hover{background:transparent;color:var(--ink)}
+[data-theme=dark] .queue-placement-toggle.is-active{background:transparent;color:var(--purple)}
 @media(max-width:520px){.search-row{display:flex;padding:5px}.search-row .control{width:auto;margin-top:0}.queue-placement-toggle{width:34px;height:34px}}
